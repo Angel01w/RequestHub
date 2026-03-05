@@ -3,7 +3,6 @@ using Microsoft.EntityFrameworkCore;
 using RequestHub.Application.DTOs;
 using RequestHub.Infrastructure.Auth;
 using RequestHub.Infrastructure.Persistence;
-using System;
 
 namespace RequestHub.Controllers;
 
