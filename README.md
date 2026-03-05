@@ -1,4 +1,4 @@
-# Project Setup Instructions
+# RequestHub
 
 ## Frontend
 1. Navigate to the `frontend` folder.
@@ -16,4 +16,3 @@
 5. Establish core Requests workflow and seed data relevant to the application.
 6. Add to the `Program.cs` appropriate configurations (including connection string, JWT settings).
 
-Ensure to check the relevant documentation for detailed implementation steps.
