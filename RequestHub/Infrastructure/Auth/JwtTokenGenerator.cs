@@ -3,41 +3,48 @@ using System.Security.Claims;
 using System.Text;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
+using RequestHub.Application.Services;
 using RequestHub.Domain.Entities;
 
 namespace RequestHub.Infrastructure.Auth;
 
-public interface IJwtTokenGenerator
+public class JwtTokenGenerator : IJwtTokenGenerator
 {
-    (string Token, DateTime ExpiresAtUtc) Generate(User user);
-}
+    private readonly JwtOptions _jwtOptions;
 
-public class JwtTokenGenerator(IOptions<JwtOptions> options) : IJwtTokenGenerator
-{
-    private readonly JwtOptions _options = options.Value;
-
-    public (string Token, DateTime ExpiresAtUtc) Generate(User user)
+    public JwtTokenGenerator(IOptions<JwtOptions> jwtOptions)
     {
-        var expires = DateTime.UtcNow.AddMinutes(_options.ExpirationMinutes);
+        _jwtOptions = jwtOptions.Value;
+    }
+
+    public (string token, DateTime expiresAtUtc) Generate(User user)
+    {
+        var expiresAtUtc = DateTime.UtcNow.AddMinutes(_jwtOptions.ExpirationMinutes);
+
         var claims = new List<Claim>
         {
-            new(JwtRegisteredClaimNames.Sub, user.Id.ToString()),
-            new(JwtRegisteredClaimNames.UniqueName, user.Username),
-            new(ClaimTypes.NameIdentifier, user.Id.ToString()),
-            new(ClaimTypes.Role, user.Role.ToString()),
-            new("areaId", user.AreaId?.ToString() ?? string.Empty)
+            new("sub", user.Id.ToString()),
+            new("username", user.Username),
+            new("role", user.Role.ToString())
         };
 
-        var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_options.Key));
+        if (user.AreaId.HasValue)
+            claims.Add(new Claim("areaId", user.AreaId.Value.ToString()));
+
+        var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_jwtOptions.Key));
         var credentials = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
 
-        var token = new JwtSecurityToken(
-            issuer: _options.Issuer,
-            audience: _options.Audience,
+        var jwt = new JwtSecurityToken(
+            issuer: _jwtOptions.Issuer,
+            audience: _jwtOptions.Audience,
             claims: claims,
-            expires: expires,
-            signingCredentials: credentials);
+            notBefore: DateTime.UtcNow,
+            expires: expiresAtUtc,
+            signingCredentials: credentials
+        );
 
-        return (new JwtSecurityTokenHandler().WriteToken(token), expires);
+        var token = new JwtSecurityTokenHandler().WriteToken(jwt);
+
+        return (token, expiresAtUtc);
     }
 }
