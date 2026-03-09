@@ -4,13 +4,12 @@ using Microsoft.EntityFrameworkCore;
 using RequestHub.Domain.Entities;
 using RequestHub.Domain.Enums;
 using RequestHub.Infrastructure.Persistence;
-using System.Security.Claims;
 
 namespace RequestHub.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
-[Authorize]
+[Authorize(Roles = "Admin")]
 public class UsersController(AppDbContext dbContext) : ControllerBase
 {
     public sealed class CreateUserDto
@@ -37,190 +36,92 @@ public class UsersController(AppDbContext dbContext) : ControllerBase
 
     public sealed class UserItemDto
     {
-        public object? Id { get; set; }
+        public int Id { get; set; }
         public string Username { get; set; } = "";
         public string FullName { get; set; } = "";
         public string Role { get; set; } = "";
-        public object? AreaId { get; set; }
+        public int? AreaId { get; set; }
     }
 
-    bool IsAdmin()
+    static UserItemDto ToItem(User u) => new()
     {
-        var role =
-            User.Claims.FirstOrDefault(c => c.Type == ClaimTypes.Role)?.Value ??
-            User.Claims.FirstOrDefault(c => c.Type.Equals("role", StringComparison.OrdinalIgnoreCase))?.Value ??
-            User.Claims.FirstOrDefault(c => c.Type.Equals("Role", StringComparison.OrdinalIgnoreCase))?.Value ??
-            "";
-
-        role = role.Trim().Trim('"');
-        return role.Equals("Admin", StringComparison.OrdinalIgnoreCase) || role.Equals("Administrador", StringComparison.OrdinalIgnoreCase);
-    }
-
-    static object? GetProp(object target, params string[] names)
-    {
-        foreach (var n in names)
-        {
-            var p = target.GetType().GetProperty(n);
-            if (p == null) continue;
-            return p.GetValue(target);
-        }
-        return null;
-    }
-
-    static void SetProp(object target, string propName, object? value)
-    {
-        var p = target.GetType().GetProperty(propName);
-        if (p == null || !p.CanWrite) return;
-
-        if (value == null)
-        {
-            if (!p.PropertyType.IsValueType || Nullable.GetUnderlyingType(p.PropertyType) != null)
-                p.SetValue(target, null);
-            return;
-        }
-
-        var t = Nullable.GetUnderlyingType(p.PropertyType) ?? p.PropertyType;
-
-        try
-        {
-            if (t.IsEnum)
-            {
-                if (value is string s) p.SetValue(target, Enum.Parse(t, s, true));
-                else p.SetValue(target, Enum.ToObject(t, value));
-                return;
-            }
-
-            if (t == typeof(string))
-            {
-                p.SetValue(target, Convert.ToString(value));
-                return;
-            }
-
-            p.SetValue(target, Convert.ChangeType(value, t));
-        }
-        catch { }
-    }
-
-    static int? GetInt(object target, params string[] names)
-    {
-        var v = GetProp(target, names);
-        if (v == null) return null;
-        if (v is int i) return i;
-        return int.TryParse(v.ToString(), out var x) ? x : null;
-    }
-
-    static string GetString(object target, params string[] names)
-    {
-        var v = GetProp(target, names);
-        return v == null ? "" : Convert.ToString(v) ?? "";
-    }
-
-    static UserItemDto ToItem(User u)
-    {
-        return new UserItemDto
-        {
-            Id = GetProp(u, "Id", "UserId", "IdUsuario"),
-            Username = GetString(u, "Username", "UserName", "Email"),
-            FullName = GetString(u, "FullName", "Name", "NombreCompleto"),
-            Role = GetString(u, "Role", "Rol"),
-            AreaId = GetProp(u, "AreaId", "IdArea")
-        };
-    }
-
-    static void ApplyCommon(User u, string username, string fullName, string role, int? areaId)
-    {
-        if (!string.IsNullOrWhiteSpace(username))
-        {
-            u.Username = username;
-            SetProp(u, "UserName", username);
-            if (username.Contains("@")) SetProp(u, "Email", username);
-        }
-
-        if (!string.IsNullOrWhiteSpace(fullName))
-        {
-            SetProp(u, "FullName", fullName);
-            SetProp(u, "Name", fullName);
-        }
-
-        if (!string.IsNullOrWhiteSpace(role))
-        {
-            try { u.Role = Enum.Parse<UserRole>(role, true); } catch { }
-            SetProp(u, "Rol", role);
-        }
-
-        if (areaId.HasValue)
-        {
-            SetProp(u, "AreaId", areaId.Value);
-            SetProp(u, "IdArea", areaId.Value);
-        }
-    }
-
-    static void SetPassword(User u, string password)
-    {
-        u.PasswordHash = BCrypt.Net.BCrypt.HashPassword(password);
-    }
+        Id = u.Id,
+        Username = u.Username,
+        FullName = u.FullName,
+        Role = u.Role.ToString(),
+        AreaId = u.AreaId
+    };
 
     [HttpGet]
     public async Task<ActionResult<List<UserItemDto>>> GetAll()
     {
-        if (!IsAdmin()) return Forbid();
+        var list = await dbContext.Users
+            .AsNoTracking()
+            .OrderBy(x => x.Username)
+            .ToListAsync();
 
-        var list = await dbContext.Users.AsNoTracking().ToListAsync();
-        var res = new List<UserItemDto>(list.Count);
-        foreach (var u in list) res.Add(ToItem(u));
-        return Ok(res);
+        return Ok(list.Select(ToItem).ToList());
     }
 
     [HttpPost]
     public async Task<ActionResult<UserItemDto>> Create([FromBody] CreateUserDto request)
     {
-        if (!IsAdmin()) return Forbid();
-
         var username = (request.Username ?? "").Trim();
         var password = request.Password ?? "";
         var fullName = (request.FullName ?? "").Trim();
-        var role = (request.Role ?? "").Trim();
+        var roleText = (request.Role ?? "").Trim();
 
         if (string.IsNullOrWhiteSpace(username)) return BadRequest("Username requerido");
         if (string.IsNullOrWhiteSpace(password)) return BadRequest("Password requerido");
-        if (string.IsNullOrWhiteSpace(role)) return BadRequest("Role requerido");
+        if (string.IsNullOrWhiteSpace(fullName)) return BadRequest("FullName requerido");
+        if (string.IsNullOrWhiteSpace(roleText)) return BadRequest("Role requerido");
 
-        var exists = await dbContext.Users.AnyAsync(u => u.Username == username);
+        if (!Enum.TryParse<UserRole>(roleText, true, out var role))
+            return BadRequest("Role inválido");
+
+        var exists = await dbContext.Users.AnyAsync(x => x.Username == username);
         if (exists) return Conflict("El usuario ya existe");
 
-        var u = new User();
-        ApplyCommon(u, username, fullName, role, request.AreaId);
-        SetPassword(u, password);
+        var user = new User
+        {
+            Username = username,
+            FullName = fullName,
+            Role = role,
+            AreaId = request.AreaId,
+            PasswordHash = BCrypt.Net.BCrypt.HashPassword(password)
+        };
 
-        dbContext.Users.Add(u);
+        dbContext.Users.Add(user);
         await dbContext.SaveChangesAsync();
 
-        return Ok(ToItem(u));
+        return Ok(ToItem(user));
     }
 
     [HttpPut("{id:int}")]
     public async Task<ActionResult<UserItemDto>> Update(int id, [FromBody] UpdateUserDto request)
     {
-        if (!IsAdmin()) return Forbid();
-
         var user = await dbContext.Users.FindAsync(id);
         if (user == null) return NotFound();
 
         var username = (request.Username ?? "").Trim();
         var fullName = (request.FullName ?? "").Trim();
-        var role = (request.Role ?? "").Trim();
+        var roleText = (request.Role ?? "").Trim();
 
-        if (!string.IsNullOrWhiteSpace(username))
-        {
-            var other = await dbContext.Users.AsNoTracking().FirstOrDefaultAsync(x => x.Username == username);
-            if (other != null)
-            {
-                var otherId = GetInt(other, "Id", "UserId", "IdUsuario");
-                if (otherId.HasValue && otherId.Value != id) return Conflict("El usuario ya existe");
-            }
-        }
+        if (string.IsNullOrWhiteSpace(username)) return BadRequest("Username requerido");
+        if (string.IsNullOrWhiteSpace(fullName)) return BadRequest("FullName requerido");
+        if (string.IsNullOrWhiteSpace(roleText)) return BadRequest("Role requerido");
 
-        ApplyCommon(user, username, fullName, role, request.AreaId);
+        if (!Enum.TryParse<UserRole>(roleText, true, out var role))
+            return BadRequest("Role inválido");
+
+        var exists = await dbContext.Users.AnyAsync(x => x.Username == username && x.Id != id);
+        if (exists) return Conflict("El usuario ya existe");
+
+        user.Username = username;
+        user.FullName = fullName;
+        user.Role = role;
+        user.AreaId = request.AreaId;
+
         await dbContext.SaveChangesAsync();
 
         return Ok(ToItem(user));
@@ -229,8 +130,6 @@ public class UsersController(AppDbContext dbContext) : ControllerBase
     [HttpDelete("{id:int}")]
     public async Task<IActionResult> Delete(int id)
     {
-        if (!IsAdmin()) return Forbid();
-
         var user = await dbContext.Users.FindAsync(id);
         if (user == null) return NotFound();
 
@@ -243,15 +142,13 @@ public class UsersController(AppDbContext dbContext) : ControllerBase
     [HttpPost("{id:int}/reset-password")]
     public async Task<IActionResult> ResetPassword(int id, [FromBody] ResetPasswordDto request)
     {
-        if (!IsAdmin()) return Forbid();
-
         var user = await dbContext.Users.FindAsync(id);
         if (user == null) return NotFound();
 
         var pass = request.NewPassword ?? "";
         if (string.IsNullOrWhiteSpace(pass)) return BadRequest("NewPassword requerido");
 
-        SetPassword(user, pass);
+        user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(pass);
         await dbContext.SaveChangesAsync();
 
         return NoContent();

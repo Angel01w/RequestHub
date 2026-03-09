@@ -1,8 +1,6 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using RequestHub.Domain.Entities;
 using RequestHub.Domain.Enums;
-using System.Collections.Generic;
-using System.Reflection.Emit;
 
 namespace RequestHub.Infrastructure.Persistence;
 
@@ -18,6 +16,32 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        modelBuilder.Entity<User>(entity =>
+        {
+            entity.Property(x => x.Username)
+                .HasMaxLength(100)
+                .IsRequired();
+
+            entity.Property(x => x.Email)
+                .HasMaxLength(150)
+                .IsRequired();
+
+            entity.Property(x => x.PasswordHash)
+                .IsRequired();
+
+            entity.Property(x => x.FullName)
+                .HasMaxLength(200)
+                .IsRequired();
+
+            entity.Property(x => x.Role)
+                .HasConversion<string>()
+                .HasMaxLength(20)
+                .IsRequired();
+
+            entity.HasIndex(x => x.Username).IsUnique();
+            entity.HasIndex(x => x.Email).IsUnique();
+        });
+
         modelBuilder.Entity<Area>().HasData(
             new Area { Id = 1, Name = "TI" },
             new Area { Id = 2, Name = "Mantenimiento" },
@@ -39,14 +63,10 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             new RequestType { Id = 5, Name = "Compra insumos", AreaId = 4 }
         );
 
-        modelBuilder.Entity<User>().HasData(
-            new User { Id = 1, Username = "admin", FullName = "Administrador", Role = UserRole.Admin, PasswordHash = BCrypt.Net.BCrypt.HashPassword("Admin123*") },
-            new User { Id = 2, Username = "solicitante", FullName = "Usuario Solicitante", Role = UserRole.Solicitante, PasswordHash = BCrypt.Net.BCrypt.HashPassword("Solicitante123*") },
-            new User { Id = 3, Username = "gestor-ti", FullName = "Gestor TI", Role = UserRole.Gestor, AreaId = 1, PasswordHash = BCrypt.Net.BCrypt.HashPassword("Gestor123*") }
-        );
-
         modelBuilder.Entity<ServiceRequest>()
             .HasIndex(x => x.Number)
             .IsUnique();
+
+        base.OnModelCreating(modelBuilder);
     }
 }
