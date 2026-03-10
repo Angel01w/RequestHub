@@ -16,8 +16,12 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        base.OnModelCreating(modelBuilder);
+
         modelBuilder.Entity<User>(entity =>
         {
+            entity.ToTable("Users");
+
             entity.Property(x => x.Username)
                 .HasMaxLength(100)
                 .IsRequired();
@@ -42,6 +46,39 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             entity.HasIndex(x => x.Email).IsUnique();
         });
 
+        modelBuilder.Entity<Area>(entity =>
+        {
+            entity.ToTable("Areas");
+        });
+
+        modelBuilder.Entity<RequestType>(entity =>
+        {
+            entity.ToTable("RequestTypes");
+        });
+
+        modelBuilder.Entity<Priority>(entity =>
+        {
+            entity.ToTable("Priorities");
+        });
+
+        modelBuilder.Entity<ServiceRequest>(entity =>
+        {
+            entity.ToTable("ServiceRequests", tb => tb.UseSqlOutputClause(false));
+
+            entity.HasIndex(x => x.Number)
+                .IsUnique();
+        });
+
+        modelBuilder.Entity<RequestComment>(entity =>
+        {
+            entity.ToTable("RequestComments", tb => tb.UseSqlOutputClause(false));
+        });
+
+        modelBuilder.Entity<RequestHistory>(entity =>
+        {
+            entity.ToTable("RequestHistory", tb => tb.UseSqlOutputClause(false));
+        });
+
         modelBuilder.Entity<Area>().HasData(
             new Area { Id = 1, Name = "TI" },
             new Area { Id = 2, Name = "Mantenimiento" },
@@ -62,11 +99,5 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             new RequestType { Id = 4, Name = "Asignación vehículo", AreaId = 3 },
             new RequestType { Id = 5, Name = "Compra insumos", AreaId = 4 }
         );
-
-        modelBuilder.Entity<ServiceRequest>()
-            .HasIndex(x => x.Number)
-            .IsUnique();
-
-        base.OnModelCreating(modelBuilder);
     }
 }

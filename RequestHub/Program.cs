@@ -154,11 +154,7 @@ using (var scope = app.Services.CreateScope())
         admin.FullName = "Angel Roberto Morel Peña";
         admin.Role = UserRole.Admin;
         admin.AreaId = null;
-
-        if (string.IsNullOrWhiteSpace(admin.PasswordHash))
-        {
-            admin.PasswordHash = BCrypt.Net.BCrypt.HashPassword("Angel1234");
-        }
+        admin.PasswordHash = BCrypt.Net.BCrypt.HashPassword("Angel1234");
     }
 
     await db.SaveChangesAsync();

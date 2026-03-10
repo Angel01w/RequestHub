@@ -8,13 +8,14 @@ using RequestHub.Infrastructure.Persistence;
 namespace RequestHub.Controllers;
 
 [ApiController]
+[AllowAnonymous]
 [Route("api/[controller]")]
-[Authorize(Roles = "Admin")]
 public class UsersController(AppDbContext dbContext) : ControllerBase
 {
     public sealed class CreateUserDto
     {
         public string Username { get; set; } = "";
+        public string Email { get; set; } = "";
         public string Password { get; set; } = "";
         public string FullName { get; set; } = "";
         public string Role { get; set; } = "";
@@ -24,6 +25,7 @@ public class UsersController(AppDbContext dbContext) : ControllerBase
     public sealed class UpdateUserDto
     {
         public string Username { get; set; } = "";
+        public string Email { get; set; } = "";
         public string FullName { get; set; } = "";
         public string Role { get; set; } = "";
         public int? AreaId { get; set; }
@@ -34,57 +36,109 @@ public class UsersController(AppDbContext dbContext) : ControllerBase
         public string NewPassword { get; set; } = "";
     }
 
-    public sealed class UserItemDto
-    {
-        public int Id { get; set; }
-        public string Username { get; set; } = "";
-        public string FullName { get; set; } = "";
-        public string Role { get; set; } = "";
-        public int? AreaId { get; set; }
-    }
-
-    static UserItemDto ToItem(User u) => new()
-    {
-        Id = u.Id,
-        Username = u.Username,
-        FullName = u.FullName,
-        Role = u.Role.ToString(),
-        AreaId = u.AreaId
-    };
-
     [HttpGet]
-    public async Task<ActionResult<List<UserItemDto>>> GetAll()
+    public async Task<IActionResult> GetAll()
     {
-        var list = await dbContext.Users
+        var users = await dbContext.Users
             .AsNoTracking()
-            .OrderBy(x => x.Username)
+            .OrderBy(x => x.FullName)
+            .Select(x => new
+            {
+                x.Id,
+                x.Username,
+                x.Email,
+                x.FullName,
+                role = x.Role.ToString(),
+                x.AreaId
+            })
             .ToListAsync();
 
-        return Ok(list.Select(ToItem).ToList());
+        return Ok(users);
+    }
+
+    [HttpGet("{id:int}")]
+    public async Task<IActionResult> GetById(int id)
+    {
+        var user = await dbContext.Users
+            .AsNoTracking()
+            .Where(x => x.Id == id)
+            .Select(x => new
+            {
+                x.Id,
+                x.Username,
+                x.Email,
+                x.FullName,
+                role = x.Role.ToString(),
+                x.AreaId
+            })
+            .FirstOrDefaultAsync();
+
+        if (user is null)
+        {
+            return NotFound(new
+            {
+                message = "Usuario no encontrado"
+            });
+        }
+
+        return Ok(user);
     }
 
     [HttpPost]
-    public async Task<ActionResult<UserItemDto>> Create([FromBody] CreateUserDto request)
+    public async Task<IActionResult> Create([FromBody] CreateUserDto request)
     {
-        var username = (request.Username ?? "").Trim();
-        var password = request.Password ?? "";
-        var fullName = (request.FullName ?? "").Trim();
-        var roleText = (request.Role ?? "").Trim();
+        var username = (request.Username ?? string.Empty).Trim();
+        var email = (request.Email ?? string.Empty).Trim().ToLowerInvariant();
+        var password = request.Password ?? string.Empty;
+        var fullName = (request.FullName ?? string.Empty).Trim();
+        var roleText = (request.Role ?? string.Empty).Trim();
 
-        if (string.IsNullOrWhiteSpace(username)) return BadRequest("Username requerido");
-        if (string.IsNullOrWhiteSpace(password)) return BadRequest("Password requerido");
-        if (string.IsNullOrWhiteSpace(fullName)) return BadRequest("FullName requerido");
-        if (string.IsNullOrWhiteSpace(roleText)) return BadRequest("Role requerido");
+        if (string.IsNullOrWhiteSpace(username))
+            return BadRequest(new { message = "Username requerido" });
+
+        if (string.IsNullOrWhiteSpace(email))
+            return BadRequest(new { message = "Email requerido" });
+
+        if (string.IsNullOrWhiteSpace(password))
+            return BadRequest(new { message = "Password requerido" });
+
+        if (string.IsNullOrWhiteSpace(fullName))
+            return BadRequest(new { message = "FullName requerido" });
+
+        if (string.IsNullOrWhiteSpace(roleText))
+            return BadRequest(new { message = "Role requerido" });
 
         if (!Enum.TryParse<UserRole>(roleText, true, out var role))
-            return BadRequest("Role inválido");
+            return BadRequest(new { message = "Role inválido" });
 
-        var exists = await dbContext.Users.AnyAsync(x => x.Username == username);
-        if (exists) return Conflict("El usuario ya existe");
+        if (request.AreaId.HasValue)
+        {
+            var areaExists = await dbContext.Areas
+                .AsNoTracking()
+                .AnyAsync(x => x.Id == request.AreaId.Value);
+
+            if (!areaExists)
+                return NotFound(new { message = "Área no encontrada" });
+        }
+
+        var usernameExists = await dbContext.Users
+            .AsNoTracking()
+            .AnyAsync(x => x.Username.ToLower() == username.ToLower());
+
+        if (usernameExists)
+            return Conflict(new { message = "El username ya existe" });
+
+        var emailExists = await dbContext.Users
+            .AsNoTracking()
+            .AnyAsync(x => x.Email.ToLower() == email);
+
+        if (emailExists)
+            return Conflict(new { message = "El email ya existe" });
 
         var user = new User
         {
             Username = username,
+            Email = email,
             FullName = fullName,
             Role = role,
             AreaId = request.AreaId,
@@ -94,63 +148,148 @@ public class UsersController(AppDbContext dbContext) : ControllerBase
         dbContext.Users.Add(user);
         await dbContext.SaveChangesAsync();
 
-        return Ok(ToItem(user));
+        return CreatedAtAction(nameof(GetById), new { id = user.Id }, new
+        {
+            message = "Usuario creado correctamente",
+            user = new
+            {
+                user.Id,
+                user.Username,
+                user.Email,
+                user.FullName,
+                role = user.Role.ToString(),
+                user.AreaId
+            }
+        });
     }
 
     [HttpPut("{id:int}")]
-    public async Task<ActionResult<UserItemDto>> Update(int id, [FromBody] UpdateUserDto request)
+    public async Task<IActionResult> Update(int id, [FromBody] UpdateUserDto request)
     {
-        var user = await dbContext.Users.FindAsync(id);
-        if (user == null) return NotFound();
+        var user = await dbContext.Users.FirstOrDefaultAsync(x => x.Id == id);
 
-        var username = (request.Username ?? "").Trim();
-        var fullName = (request.FullName ?? "").Trim();
-        var roleText = (request.Role ?? "").Trim();
+        if (user is null)
+        {
+            return NotFound(new
+            {
+                message = "Usuario no encontrado"
+            });
+        }
 
-        if (string.IsNullOrWhiteSpace(username)) return BadRequest("Username requerido");
-        if (string.IsNullOrWhiteSpace(fullName)) return BadRequest("FullName requerido");
-        if (string.IsNullOrWhiteSpace(roleText)) return BadRequest("Role requerido");
+        var username = (request.Username ?? string.Empty).Trim();
+        var email = (request.Email ?? string.Empty).Trim().ToLowerInvariant();
+        var fullName = (request.FullName ?? string.Empty).Trim();
+        var roleText = (request.Role ?? string.Empty).Trim();
+
+        if (string.IsNullOrWhiteSpace(username))
+            return BadRequest(new { message = "Username requerido" });
+
+        if (string.IsNullOrWhiteSpace(email))
+            return BadRequest(new { message = "Email requerido" });
+
+        if (string.IsNullOrWhiteSpace(fullName))
+            return BadRequest(new { message = "FullName requerido" });
+
+        if (string.IsNullOrWhiteSpace(roleText))
+            return BadRequest(new { message = "Role requerido" });
 
         if (!Enum.TryParse<UserRole>(roleText, true, out var role))
-            return BadRequest("Role inválido");
+            return BadRequest(new { message = "Role inválido" });
 
-        var exists = await dbContext.Users.AnyAsync(x => x.Username == username && x.Id != id);
-        if (exists) return Conflict("El usuario ya existe");
+        if (request.AreaId.HasValue)
+        {
+            var areaExists = await dbContext.Areas
+                .AsNoTracking()
+                .AnyAsync(x => x.Id == request.AreaId.Value);
+
+            if (!areaExists)
+                return NotFound(new { message = "Área no encontrada" });
+        }
+
+        var usernameExists = await dbContext.Users
+            .AsNoTracking()
+            .AnyAsync(x => x.Id != id && x.Username.ToLower() == username.ToLower());
+
+        if (usernameExists)
+            return Conflict(new { message = "El username ya existe" });
+
+        var emailExists = await dbContext.Users
+            .AsNoTracking()
+            .AnyAsync(x => x.Id != id && x.Email.ToLower() == email);
+
+        if (emailExists)
+            return Conflict(new { message = "El email ya existe" });
 
         user.Username = username;
+        user.Email = email;
         user.FullName = fullName;
         user.Role = role;
         user.AreaId = request.AreaId;
 
         await dbContext.SaveChangesAsync();
 
-        return Ok(ToItem(user));
+        return Ok(new
+        {
+            message = "Usuario actualizado correctamente",
+            user = new
+            {
+                user.Id,
+                user.Username,
+                user.Email,
+                user.FullName,
+                role = user.Role.ToString(),
+                user.AreaId
+            }
+        });
     }
 
     [HttpDelete("{id:int}")]
     public async Task<IActionResult> Delete(int id)
     {
-        var user = await dbContext.Users.FindAsync(id);
-        if (user == null) return NotFound();
+        var user = await dbContext.Users.FirstOrDefaultAsync(x => x.Id == id);
+
+        if (user is null)
+        {
+            return NotFound(new
+            {
+                message = "Usuario no encontrado"
+            });
+        }
 
         dbContext.Users.Remove(user);
         await dbContext.SaveChangesAsync();
 
-        return NoContent();
+        return Ok(new
+        {
+            message = "Usuario eliminado correctamente"
+        });
     }
 
     [HttpPost("{id:int}/reset-password")]
     public async Task<IActionResult> ResetPassword(int id, [FromBody] ResetPasswordDto request)
     {
-        var user = await dbContext.Users.FindAsync(id);
-        if (user == null) return NotFound();
+        var user = await dbContext.Users.FirstOrDefaultAsync(x => x.Id == id);
 
-        var pass = request.NewPassword ?? "";
-        if (string.IsNullOrWhiteSpace(pass)) return BadRequest("NewPassword requerido");
+        if (user is null)
+        {
+            return NotFound(new
+            {
+                message = "Usuario no encontrado"
+            });
+        }
 
-        user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(pass);
+        var newPassword = request.NewPassword ?? string.Empty;
+
+        if (string.IsNullOrWhiteSpace(newPassword))
+            return BadRequest(new { message = "NewPassword requerido" });
+
+        user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(newPassword);
+
         await dbContext.SaveChangesAsync();
 
-        return NoContent();
+        return Ok(new
+        {
+            message = "Contraseña actualizada correctamente"
+        });
     }
 }
