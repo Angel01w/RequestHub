@@ -1,12 +1,10 @@
-﻿<!-- src/views/CatalogAdminView.vue -->
-<script setup>
+﻿<script setup>
 	import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 	import { useRouter } from "vue-router";
 
 	const router = useRouter();
 
 	const API_BASE = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/+$/, "");
-	const TOKEN_KEY = "token";
 
 	const activeTab = ref("area");
 	const search = ref("");
@@ -30,14 +28,17 @@
 
 	const areaForm = ref({ name: "" });
 	const typeForm = ref({ name: "", areaId: "" });
+	const userForm = ref({ name: "", email: "", password: "", role: "", areaId: "" });
+
+	const editingAreaId = ref(null);
+	const editingTypeId = ref(null);
+	const editingUserId = ref(null);
 
 	const roles = [
 		{ value: "Solicitante", label: "Solicitante", id: 1 },
 		{ value: "Gestor", label: "Gestor", id: 2 },
-		{ value: "Admin", label: "Administrador", id: 3 },
+		{ value: "Admin", label: "Administrador", id: 3 }
 	];
-
-	const userForm = ref({ name: "", email: "", password: "", role: "", areaId: "" });
 
 	const areaErrors = ref({ name: "" });
 	const typeErrors = ref({ name: "", areaId: "" });
@@ -64,52 +65,14 @@
 		return apiErrorUsers.value;
 	});
 
-	function clearTokens() {
-		const keys = [
-			"token",
-			"access_token",
-			"accessToken",
-			"jwt",
-			"jwt_token",
-			"rh_token",
-			"sm_token",
-		];
-		for (const k of keys) {
-			localStorage.removeItem(k);
-			sessionStorage.removeItem(k);
-		}
-	}
+	const areaModalTitle = computed(() => editingAreaId.value ? "Editar Área" : "Agregar Nueva Área");
+	const areaModalActionLabel = computed(() => editingAreaId.value ? "Guardar Cambios" : "Crear");
 
-	function getToken() {
-		const keys = [
-			TOKEN_KEY,
-			"access_token",
-			"accessToken",
-			"jwt",
-			"jwt_token",
-			"rh_token",
-			"sm_token",
-		];
+	const typeModalTitle = computed(() => editingTypeId.value ? "Editar Tipo de Solicitud" : "Nuevo Tipo de Solicitud");
+	const typeModalActionLabel = computed(() => editingTypeId.value ? "Guardar Cambios" : "Crear Tipo");
 
-		for (const k of keys) {
-			const v = localStorage.getItem(k) || sessionStorage.getItem(k);
-			if (v) return String(v).replace(/^"+|"+$/g, "");
-		}
-
-		const objKeys = ["user", "rh_user", "sm_user", "auth", "auth_user"];
-
-		for (const k of objKeys) {
-			try {
-				const raw = localStorage.getItem(k) || sessionStorage.getItem(k);
-				if (!raw) continue;
-				const o = JSON.parse(raw);
-				const t = o?.token || o?.accessToken || o?.jwt;
-				if (t) return String(t).replace(/^"+|"+$/g, "");
-			} catch { }
-		}
-
-		return "";
-	}
+	const userModalTitle = computed(() => editingUserId.value ? "Editar Usuario" : "Nuevo Usuario");
+	const userModalActionLabel = computed(() => editingUserId.value ? "Guardar Cambios" : "Crear Usuario");
 
 	function joinUrl(base, path) {
 		if (!base) return path;
@@ -118,38 +81,43 @@
 		return `${base}${path.startsWith("/") ? "" : "/"}${path}`;
 	}
 
+	async function readResponseError(res) {
+		let msg = `Error ${res.status}`;
+
+		try {
+			const data = await res.clone().json();
+			msg = data?.message || data?.title || data?.error || data?.detail || msg;
+		} catch {
+			try {
+				const text = await res.clone().text();
+				if (text) msg = text;
+			} catch { }
+		}
+
+		return msg;
+	}
+
 	async function api(path, { method = "GET", body } = {}) {
-		const headers = { Accept: "application/json" };
-		const token = getToken();
-		if (token) headers.Authorization = `Bearer ${token}`;
-		if (body !== undefined) headers["Content-Type"] = "application/json";
+		const headers = {
+			Accept: "application/json"
+		};
+
+		if (body !== undefined) {
+			headers["Content-Type"] = "application/json";
+		}
 
 		const res = await fetch(joinUrl(API_BASE, path), {
 			method,
 			headers,
-			body: body !== undefined ? JSON.stringify(body) : undefined,
+			body: body !== undefined ? JSON.stringify(body) : undefined
 		});
 
-		if (res.status === 401) {
-			clearTokens();
-			throw new Error("No autorizado. Inicia sesión y vuelve a intentar.");
-		}
-
 		if (!res.ok) {
-			let msg = `Error ${res.status}`;
-			try {
-				const data = await res.json();
-				msg = data?.message || data?.title || data?.error || data?.detail || msg;
-			} catch {
-				try {
-					const text = await res.text();
-					if (text) msg = text;
-				} catch { }
-			}
-			throw new Error(msg);
+			throw new Error(await readResponseError(res));
 		}
 
 		if (res.status === 204) return null;
+
 		const ct = res.headers.get("content-type") || "";
 		if (ct.includes("application/json")) return await res.json();
 		return await res.text();
@@ -168,17 +136,20 @@
 	function resetAreaForm() {
 		areaForm.value = { name: "" };
 		areaErrors.value = { name: "" };
+		editingAreaId.value = null;
 	}
 
 	function resetTypeForm() {
 		typeForm.value = { name: "", areaId: "" };
 		typeErrors.value = { name: "", areaId: "" };
+		editingTypeId.value = null;
 	}
 
 	function resetUserForm() {
 		userForm.value = { name: "", email: "", password: "", role: "", areaId: "" };
 		userErrors.value = { name: "", email: "", password: "", role: "", areaId: "" };
 		showPassword.value = false;
+		editingUserId.value = null;
 	}
 
 	function onCancelModal() {
@@ -194,21 +165,63 @@
 			isAreaModalOpen.value = true;
 			return;
 		}
+
 		if (activeTab.value === "type") {
 			resetTypeForm();
 			isTypeModalOpen.value = true;
 			return;
 		}
+
 		resetUserForm();
+		isUserModalOpen.value = true;
+	}
+
+	function openEditArea(area) {
+		editingAreaId.value = normalizeId(area.id);
+		areaForm.value = { name: toStr(area.name) };
+		areaErrors.value = { name: "" };
+		isAreaModalOpen.value = true;
+	}
+
+	function openEditType(type) {
+		editingTypeId.value = normalizeId(type.id);
+		typeForm.value = {
+			name: toStr(type.name),
+			areaId: normalizeId(type.areaId) ?? ""
+		};
+		typeErrors.value = { name: "", areaId: "" };
+		isTypeModalOpen.value = true;
+	}
+
+	function openEditUser(user) {
+		editingUserId.value = normalizeId(user.id);
+		userForm.value = {
+			name: toStr(user.fullName),
+			email: toStr(user.email ?? user.username),
+			password: "",
+			role: toStr(user.role),
+			areaId: normalizeId(user.areaId) ?? ""
+		};
+		userErrors.value = { name: "", email: "", password: "", role: "", areaId: "" };
+		showPassword.value = false;
 		isUserModalOpen.value = true;
 	}
 
 	function validateArea() {
 		areaErrors.value = { name: "" };
-		if (!areaForm.value.name.trim()) {
+
+		const name = areaForm.value.name.trim();
+
+		if (!name) {
 			areaErrors.value.name = "El nombre es obligatorio.";
 			return false;
 		}
+
+		if (name.length < 2) {
+			areaErrors.value.name = "El nombre debe tener al menos 2 caracteres.";
+			return false;
+		}
+
 		return true;
 	}
 
@@ -216,14 +229,22 @@
 		typeErrors.value = { name: "", areaId: "" };
 		let ok = true;
 
-		if (!typeForm.value.name.trim()) {
+		const name = typeForm.value.name.trim();
+		const areaId = normalizeId(typeForm.value.areaId);
+
+		if (!name) {
 			typeErrors.value.name = "El nombre es obligatorio.";
 			ok = false;
+		} else if (name.length < 2) {
+			typeErrors.value.name = "El nombre debe tener al menos 2 caracteres.";
+			ok = false;
 		}
-		if (!typeForm.value.areaId) {
+
+		if (!areaId) {
 			typeErrors.value.areaId = "Selecciona un área.";
 			ok = false;
 		}
+
 		return ok;
 	}
 
@@ -231,34 +252,36 @@
 		userErrors.value = { name: "", email: "", password: "", role: "", areaId: "" };
 		let ok = true;
 
-		if (!userForm.value.name.trim()) {
+		const fullName = userForm.value.name.trim();
+		const email = userForm.value.email.trim();
+		const role = userForm.value.role.trim();
+		const areaId = normalizeId(userForm.value.areaId);
+		const password = userForm.value.password ?? "";
+
+		if (!fullName) {
 			userErrors.value.name = "El nombre es obligatorio.";
 			ok = false;
 		}
 
-		const emailOrUser = userForm.value.email.trim();
-		if (!emailOrUser) {
-			userErrors.value.email = "El usuario/correo es obligatorio.";
+		if (!email) {
+			userErrors.value.email = "El correo es obligatorio.";
 			ok = false;
-		} else if (emailOrUser.includes("@") && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailOrUser)) {
+		} else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
 			userErrors.value.email = "Correo inválido.";
-			ok = false;
-		} else if (!emailOrUser.includes("@") && emailOrUser.length < 3) {
-			userErrors.value.email = "Usuario inválido.";
 			ok = false;
 		}
 
-		if (!userForm.value.password) {
+		if (!editingUserId.value && !password) {
 			userErrors.value.password = "La contraseña es obligatoria.";
 			ok = false;
 		}
 
-		if (!userForm.value.role) {
+		if (!role) {
 			userErrors.value.role = "Selecciona un rol.";
 			ok = false;
 		}
 
-		if (!userForm.value.areaId) {
+		if (!areaId) {
 			userErrors.value.areaId = "Selecciona un área.";
 			ok = false;
 		}
@@ -270,46 +293,106 @@
 		return v == null ? "" : String(v);
 	}
 
+	function normalizeId(v) {
+		return v == null || v === "" ? null : Number(v);
+	}
+
 	function mapArea(a) {
+		const source = a?.area ?? a;
 		return {
-			id: a.id ?? a.areaId ?? a.Id ?? a.AreaId,
-			name: a.name ?? a.nombre ?? a.Name ?? a.Nombre,
+			id: source?.id ?? source?.areaId ?? source?.Id ?? source?.AreaId ?? null,
+			name: source?.name ?? source?.nombre ?? source?.Name ?? source?.Nombre ?? ""
 		};
 	}
 
 	function mapType(t) {
+		const source = t?.type ?? t;
 		return {
-			id: t.id ?? t.requestTypeId ?? t.Id ?? t.RequestTypeId ?? t.TipoSolicitudId ?? t.tipoSolicitudId,
-			name: t.name ?? t.nombre ?? t.Name ?? t.Nombre,
-			areaId: t.areaId ?? t.AreaId ?? t.idArea ?? t.IdArea,
+			id: source?.id ?? source?.requestTypeId ?? source?.Id ?? source?.RequestTypeId ?? source?.TipoSolicitudId ?? source?.tipoSolicitudId ?? null,
+			name: source?.name ?? source?.nombre ?? source?.Name ?? source?.Nombre ?? "",
+			areaId: source?.areaId ?? source?.AreaId ?? source?.idArea ?? source?.IdArea ?? null
 		};
 	}
 
 	function mapUser(u) {
+		const source = u?.user ?? u;
 		return {
-			id: u.id ?? u.userId ?? u.Id ?? u.UserId,
-			username: u.username ?? u.userName ?? u.email ?? u.Username ?? u.UserName ?? u.Email,
-			fullName: u.fullName ?? u.name ?? u.FullName ?? u.Name ?? u.Nombre ?? "",
-			role: u.role ?? u.rol ?? u.Role ?? u.Rol ?? "",
-			areaId: u.areaId ?? u.AreaId ?? u.idArea ?? u.IdArea ?? null,
+			id: source?.id ?? source?.userId ?? source?.Id ?? source?.UserId ?? null,
+			username: source?.username ?? source?.userName ?? source?.Username ?? source?.UserName ?? "",
+			email: source?.email ?? source?.Email ?? source?.username ?? source?.Username ?? "",
+			fullName: source?.fullName ?? source?.name ?? source?.FullName ?? source?.Name ?? source?.Nombre ?? "",
+			role: source?.role ?? source?.rol ?? source?.Role ?? source?.Rol ?? "",
+			areaId: source?.areaId ?? source?.AreaId ?? source?.idArea ?? source?.IdArea ?? null
 		};
 	}
 
+	function upsertAreaInList(area) {
+		const mapped = mapArea(area);
+
+		if (mapped.id == null) return false;
+
+		const index = areas.value.findIndex(x => Number(x.id) === Number(mapped.id));
+
+		if (index >= 0) areas.value[index] = mapped;
+		else areas.value.unshift(mapped);
+
+		return true;
+	}
+
+	function upsertTypeInList(type) {
+		const mapped = mapType(type);
+
+		if (mapped.id == null) return false;
+
+		const index = requestTypes.value.findIndex(x => Number(x.id) === Number(mapped.id));
+
+		if (index >= 0) requestTypes.value[index] = mapped;
+		else requestTypes.value.unshift(mapped);
+
+		return true;
+	}
+
+	function upsertUserInList(user) {
+		const mapped = mapUser(user);
+
+		if (mapped.id == null) return false;
+
+		const index = users.value.findIndex(x => Number(x.id) === Number(mapped.id));
+
+		if (index >= 0) users.value[index] = mapped;
+		else users.value.unshift(mapped);
+
+		return true;
+	}
+
+	function removeAreaFromList(id) {
+		areas.value = areas.value.filter(x => Number(x.id) !== Number(id));
+	}
+
+	function removeTypeFromList(id) {
+		requestTypes.value = requestTypes.value.filter(x => Number(x.id) !== Number(id));
+	}
+
+	function removeUserFromList(id) {
+		users.value = users.value.filter(x => Number(x.id) !== Number(id));
+	}
+
 	const areaNameById = computed(() => {
-		const map = new Map(areas.value.map((a) => [toStr(a.id), toStr(a.name)]));
-		return (id) => map.get(toStr(id)) ?? "";
+		const map = new Map(areas.value.map(a => [toStr(a.id), toStr(a.name)]));
+		return id => map.get(toStr(id)) ?? "";
 	});
 
 	const filteredAreas = computed(() => {
 		const q = search.value.trim().toLowerCase();
 		if (!q) return areas.value;
-		return areas.value.filter((a) => toStr(a?.name).toLowerCase().includes(q));
+		return areas.value.filter(a => toStr(a?.name).toLowerCase().includes(q));
 	});
 
 	const filteredTypes = computed(() => {
 		const q = search.value.trim().toLowerCase();
 		if (!q) return requestTypes.value;
-		return requestTypes.value.filter((t) => {
+
+		return requestTypes.value.filter(t => {
 			const n = toStr(t?.name).toLowerCase();
 			const a = toStr(areaNameById.value(t?.areaId)).toLowerCase();
 			return n.includes(q) || a.includes(q);
@@ -319,22 +402,25 @@
 	const filteredUsers = computed(() => {
 		const q = search.value.trim().toLowerCase();
 		if (!q) return users.value;
-		return users.value.filter((u) => {
+
+		return users.value.filter(u => {
 			const full = toStr(u?.fullName).toLowerCase();
 			const usern = toStr(u?.username).toLowerCase();
+			const mail = toStr(u?.email).toLowerCase();
 			const role = toStr(u?.role).toLowerCase();
 			const area = toStr(areaNameById.value(u?.areaId)).toLowerCase();
-			return full.includes(q) || usern.includes(q) || role.includes(q) || area.includes(q);
+			return full.includes(q) || usern.includes(q) || mail.includes(q) || role.includes(q) || area.includes(q);
 		});
 	});
 
 	async function loadAreas() {
 		isLoadingAreas.value = true;
 		apiErrorAreas.value = "";
+
 		try {
 			const data = await api("/api/Catalogs/areas");
 			const arr = Array.isArray(data) ? data : Array.isArray(data?.items) ? data.items : [];
-			areas.value = arr.map(mapArea).filter((x) => x.id != null);
+			areas.value = arr.map(mapArea).filter(x => x.id != null);
 		} catch (e) {
 			apiErrorAreas.value = String(e?.message || e);
 			areas.value = [];
@@ -346,10 +432,11 @@
 	async function loadTypes() {
 		isLoadingTypes.value = true;
 		apiErrorTypes.value = "";
+
 		try {
 			const data = await api("/api/Catalogs/request-types");
 			const arr = Array.isArray(data) ? data : Array.isArray(data?.items) ? data.items : [];
-			requestTypes.value = arr.map(mapType).filter((x) => x.id != null);
+			requestTypes.value = arr.map(mapType).filter(x => x.id != null);
 		} catch (e) {
 			apiErrorTypes.value = String(e?.message || e);
 			requestTypes.value = [];
@@ -361,69 +448,249 @@
 	async function loadUsers() {
 		isLoadingUsers.value = true;
 		apiErrorUsers.value = "";
+
 		try {
+			const data = await api("/api/Users");
+			const arr = Array.isArray(data) ? data : Array.isArray(data?.items) ? data.items : [];
+			users.value = arr.map(mapUser).filter(x => x.id != null);
+		} catch (e) {
+			apiErrorUsers.value = String(e?.message || e);
 			users.value = [];
-			apiErrorUsers.value = "Este módulo requiere un endpoint de usuarios. La API actual solo expone /api/Auth/login.";
 		} finally {
 			isLoadingUsers.value = false;
 		}
 	}
 
-	async function onCreateArea() {
+	async function onSaveArea() {
 		if (!validateArea()) return;
 
 		apiErrorAreas.value = "";
-		const payload = { name: areaForm.value.name.trim() };
+
+		const payload = {
+			name: areaForm.value.name.trim()
+		};
 
 		try {
-			const created = await api("/api/Catalogs/areas", { method: "POST", body: payload });
-			const mapped = mapArea(created || payload);
-			if (mapped?.id == null) await loadAreas();
-			else areas.value.unshift(mapped);
+			if (editingAreaId.value != null) {
+				const response = await api(`/api/Catalogs/areas/${editingAreaId.value}`, {
+					method: "PUT",
+					body: payload
+				});
+
+				const updated = response?.area ?? response;
+
+				if (!upsertAreaInList(updated)) {
+					await loadAreas();
+				}
+			} else {
+				const response = await api("/api/Catalogs/areas", {
+					method: "POST",
+					body: payload
+				});
+
+				const created = response?.area ?? response;
+
+				if (!upsertAreaInList(created)) {
+					await loadAreas();
+				}
+			}
+
 			closeModals();
 			resetAreaForm();
 		} catch (e) {
 			apiErrorAreas.value = String(e?.message || e);
-			if (String(e?.message || e).toLowerCase().includes("no autorizado")) router.push("/login");
 		}
 	}
 
-	async function onCreateType() {
+	async function onDeleteArea(area) {
+		const name = toStr(area?.name).trim();
+		const id = normalizeId(area?.id);
+
+		if (id == null) return;
+
+		const confirmed = window.confirm(`¿Deseas eliminar el área "${name}"?`);
+		if (!confirmed) return;
+
+		apiErrorAreas.value = "";
+
+		try {
+			await api(`/api/Catalogs/areas/${id}`, { method: "DELETE" });
+			removeAreaFromList(id);
+
+			if (editingAreaId.value === id) {
+				closeModals();
+				resetAreaForm();
+			}
+		} catch (e) {
+			apiErrorAreas.value = String(e?.message || e);
+		}
+	}
+
+	async function onSaveType() {
 		if (!validateType()) return;
 
 		apiErrorTypes.value = "";
-		const payload = { name: typeForm.value.name.trim(), areaId: typeForm.value.areaId };
+
+		const payload = {
+			name: typeForm.value.name.trim(),
+			areaId: normalizeId(typeForm.value.areaId)
+		};
 
 		try {
-			const created = await api("/api/Catalogs/request-types", { method: "POST", body: payload });
-			const mapped = mapType(created || payload);
-			if (mapped?.id == null) await loadTypes();
-			else requestTypes.value.unshift(mapped);
+			if (editingTypeId.value != null) {
+				const response = await api(`/api/Catalogs/request-types/${editingTypeId.value}`, {
+					method: "PUT",
+					body: payload
+				});
+
+				const updated = response?.type ?? response;
+
+				if (!upsertTypeInList(updated)) {
+					await loadTypes();
+				}
+			} else {
+				const response = await api("/api/Catalogs/request-types", {
+					method: "POST",
+					body: payload
+				});
+
+				const created = response?.type ?? response;
+
+				if (!upsertTypeInList(created)) {
+					await loadTypes();
+				}
+			}
+
 			closeModals();
 			resetTypeForm();
 		} catch (e) {
 			apiErrorTypes.value = String(e?.message || e);
-			if (String(e?.message || e).toLowerCase().includes("no autorizado")) router.push("/login");
 		}
 	}
 
-	async function onCreateUser() {
+	async function onDeleteType(type) {
+		const name = toStr(type?.name).trim();
+		const id = normalizeId(type?.id);
+
+		if (id == null) return;
+
+		const confirmed = window.confirm(`¿Deseas eliminar el tipo de solicitud "${name}"?`);
+		if (!confirmed) return;
+
+		apiErrorTypes.value = "";
+
+		try {
+			await api(`/api/Catalogs/request-types/${id}`, { method: "DELETE" });
+			removeTypeFromList(id);
+
+			if (editingTypeId.value === id) {
+				closeModals();
+				resetTypeForm();
+			}
+		} catch (e) {
+			apiErrorTypes.value = String(e?.message || e);
+		}
+	}
+
+	async function onSaveUser() {
 		if (!validateUser()) return;
-		apiErrorUsers.value = "No hay API para crear usuarios. Implementa un endpoint (por ejemplo /api/Users) o crea usuarios por seed/BD.";
+
+		apiErrorUsers.value = "";
+
+		const payload = {
+			username: userForm.value.email.trim(),
+			fullName: userForm.value.name.trim(),
+			email: userForm.value.email.trim(),
+			role: userForm.value.role,
+			areaId: normalizeId(userForm.value.areaId)
+		};
+
+		if (!editingUserId.value) {
+			payload.password = userForm.value.password;
+		}
+
+		if (editingUserId.value != null) {
+			try {
+				const response = await api(`/api/Users/${editingUserId.value}`, {
+					method: "PUT",
+					body: payload
+				});
+
+				const updated = response?.user ?? response;
+
+				if (!upsertUserInList(updated)) {
+					await loadUsers();
+				}
+
+				if (userForm.value.password.trim()) {
+					await api(`/api/Users/${editingUserId.value}/reset-password`, {
+						method: "POST",
+						body: { newPassword: userForm.value.password }
+					});
+				}
+
+				closeModals();
+				resetUserForm();
+			} catch (e) {
+				apiErrorUsers.value = String(e?.message || e);
+			}
+
+			return;
+		}
+
+		try {
+			const response = await api("/api/Users", { method: "POST", body: payload });
+			const created = response?.user ?? response;
+
+			if (!upsertUserInList(created)) {
+				await loadUsers();
+			}
+
+			closeModals();
+			resetUserForm();
+		} catch (e) {
+			apiErrorUsers.value = String(e?.message || e);
+		}
+	}
+
+	async function onDeleteUser(user) {
+		const name = toStr(user?.fullName || user?.username).trim();
+		const id = normalizeId(user?.id);
+
+		if (id == null) return;
+
+		const confirmed = window.confirm(`¿Deseas eliminar el usuario "${name}"?`);
+		if (!confirmed) return;
+
+		apiErrorUsers.value = "";
+
+		try {
+			await api(`/api/Users/${id}`, { method: "DELETE" });
+			removeUserFromList(id);
+
+			if (editingUserId.value === id) {
+				closeModals();
+				resetUserForm();
+			}
+		} catch (e) {
+			apiErrorUsers.value = String(e?.message || e);
+		}
 	}
 
 	function onKey(e) {
-		if (e.key === "Escape" && (isAreaModalOpen.value || isTypeModalOpen.value || isUserModalOpen.value)) onCancelModal();
+		if (e.key === "Escape" && (isAreaModalOpen.value || isTypeModalOpen.value || isUserModalOpen.value)) {
+			onCancelModal();
+		}
 	}
 
 	onMounted(async () => {
 		window.addEventListener("keydown", onKey);
-		await loadAreas();
-		await loadTypes();
-		await loadUsers();
+		await Promise.all([loadAreas(), loadTypes(), loadUsers()]);
 	});
 
-	onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
+	onBeforeUnmount(() => {
+		window.removeEventListener("keydown", onKey);
+	});
 
 	function iconPath(name) {
 		switch (name) {
@@ -538,18 +805,18 @@
 							<td class="loadingRow" colspan="2">Cargando...</td>
 						</tr>
 						<tr v-else-if="filteredAreas.length === 0">
-							<td class="empty" colspan="2"> </td>
+							<td class="empty" colspan="2"></td>
 						</tr>
 						<tr v-else v-for="a in filteredAreas" :key="a.id">
 							<td>{{ a.name }}</td>
 							<td class="td-actions">
-								<button class="btn btn--edit" type="button" disabled>
+								<button class="btn btn--edit" type="button" @click="openEditArea(a)">
 									<span class="btn__icon" aria-hidden="true">
 										<svg viewBox="0 0 24 24"><path :d="iconPath('pencil')" /></svg>
 									</span>
 									Editar
 								</button>
-								<button class="btn btn--del" type="button" disabled>
+								<button class="btn btn--del" type="button" @click="onDeleteArea(a)">
 									<span class="btn__icon" aria-hidden="true">
 										<svg viewBox="0 0 24 24"><path :d="iconPath('trash')" /></svg>
 									</span>
@@ -573,19 +840,19 @@
 							<td class="loadingRow" colspan="3">Cargando...</td>
 						</tr>
 						<tr v-else-if="filteredTypes.length === 0">
-							<td class="empty" colspan="3"> </td>
+							<td class="empty" colspan="3"></td>
 						</tr>
 						<tr v-else v-for="t in filteredTypes" :key="t.id">
 							<td>{{ t.name }}</td>
 							<td>{{ areaNameById(t.areaId) }}</td>
 							<td class="td-actions">
-								<button class="btn btn--edit" type="button" disabled>
+								<button class="btn btn--edit" type="button" @click="openEditType(t)">
 									<span class="btn__icon" aria-hidden="true">
 										<svg viewBox="0 0 24 24"><path :d="iconPath('pencil')" /></svg>
 									</span>
 									Editar
 								</button>
-								<button class="btn btn--del" type="button" disabled>
+								<button class="btn btn--del" type="button" @click="onDeleteType(t)">
 									<span class="btn__icon" aria-hidden="true">
 										<svg viewBox="0 0 24 24"><path :d="iconPath('trash')" /></svg>
 									</span>
@@ -611,21 +878,21 @@
 							<td class="loadingRow" colspan="5">Cargando...</td>
 						</tr>
 						<tr v-else-if="filteredUsers.length === 0">
-							<td class="empty" colspan="5"> </td>
+							<td class="empty" colspan="5"></td>
 						</tr>
 						<tr v-else v-for="u in filteredUsers" :key="u.id">
 							<td>{{ u.fullName }}</td>
-							<td>{{ u.username }}</td>
+							<td>{{ u.email || u.username }}</td>
 							<td><span class="roleChip">{{ u.role }}</span></td>
 							<td>{{ areaNameById(u.areaId) }}</td>
 							<td class="td-actions">
-								<button class="btn btn--edit" type="button" disabled>
+								<button class="btn btn--edit" type="button" @click="openEditUser(u)">
 									<span class="btn__icon" aria-hidden="true">
 										<svg viewBox="0 0 24 24"><path :d="iconPath('pencil')" /></svg>
 									</span>
 									Editar
 								</button>
-								<button class="btn btn--del" type="button" disabled>
+								<button class="btn btn--del" type="button" @click="onDeleteUser(u)">
 									<span class="btn__icon" aria-hidden="true">
 										<svg viewBox="0 0 24 24"><path :d="iconPath('trash')" /></svg>
 									</span>
@@ -642,13 +909,13 @@
 			 class="modalOverlay"
 			 role="dialog"
 			 aria-modal="true"
-			 aria-label="Agregar Nueva Área"
+			 :aria-label="areaModalTitle"
 			 @mousedown.self="onCancelModal">
 			<div class="modal">
 				<header class="modal__head">
 					<div>
-						<h2>Agregar Nueva Área</h2>
-						<p>Completa la información a continuación para crear una nueva entrada.</p>
+						<h2>{{ areaModalTitle }}</h2>
+						<p>Completa la información a continuación para crear o actualizar el área.</p>
 					</div>
 					<button class="modal__close" type="button" aria-label="Cerrar" @click="onCancelModal">
 						<svg viewBox="0 0 24 24"><path :d="iconPath('x')" /></svg>
@@ -665,11 +932,11 @@
 
 				<footer class="modal__foot">
 					<button class="ghost" type="button" @click="onCancelModal">Cancelar</button>
-					<button class="primary primary--spark" type="button" @click="onCreateArea">
+					<button class="primary primary--spark" type="button" @click="onSaveArea">
 						<span class="primary__icon" aria-hidden="true">
 							<svg viewBox="0 0 24 24"><path :d="iconPath('paperPlane')" /></svg>
 						</span>
-						Crear
+						{{ areaModalActionLabel }}
 					</button>
 				</footer>
 			</div>
@@ -679,12 +946,12 @@
 			 class="modalOverlay"
 			 role="dialog"
 			 aria-modal="true"
-			 aria-label="Agregar Tipo de Solicitud"
+			 :aria-label="typeModalTitle"
 			 @mousedown.self="onCancelModal">
 			<div class="modal modal--user">
 				<header class="modal__head">
 					<div>
-						<h2>Nuevo Tipo de Solicitud</h2>
+						<h2>{{ typeModalTitle }}</h2>
 					</div>
 					<button class="modal__close" type="button" aria-label="Cerrar" @click="onCancelModal">
 						<svg viewBox="0 0 24 24"><path :d="iconPath('x')" /></svg>
@@ -720,7 +987,7 @@
 
 				<footer class="modal__foot modal__foot--right">
 					<button class="ghost ghost--small" type="button" @click="onCancelModal">Cancelar</button>
-					<button class="primary primary--solid" type="button" @click="onCreateType">Crear Tipo</button>
+					<button class="primary primary--solid" type="button" @click="onSaveType">{{ typeModalActionLabel }}</button>
 				</footer>
 			</div>
 		</div>
@@ -729,12 +996,12 @@
 			 class="modalOverlay"
 			 role="dialog"
 			 aria-modal="true"
-			 aria-label="Nuevo Usuario"
+			 :aria-label="userModalTitle"
 			 @mousedown.self="onCancelModal">
 			<div class="modal modal--user">
 				<header class="modal__head">
 					<div>
-						<h2>Nuevo Usuario</h2>
+						<h2>{{ userModalTitle }}</h2>
 					</div>
 					<button class="modal__close" type="button" aria-label="Cerrar" @click="onCancelModal">
 						<svg viewBox="0 0 24 24"><path :d="iconPath('x')" /></svg>
@@ -765,7 +1032,7 @@
 					</div>
 
 					<div class="field">
-						<label>Contraseña</label>
+						<label>{{ editingUserId ? "Nueva Contraseña (Opcional)" : "Contraseña" }}</label>
 						<div class="control">
 							<span class="control__icon" aria-hidden="true">
 								<svg viewBox="0 0 24 24"><path :d="iconPath('lock')" /></svg>
@@ -809,7 +1076,7 @@
 
 				<footer class="modal__foot modal__foot--right">
 					<button class="ghost ghost--small" type="button" @click="onCancelModal">Cancelar</button>
-					<button class="primary primary--solid" type="button" @click="onCreateUser">Crear Usuario</button>
+					<button class="primary primary--solid" type="button" @click="onSaveUser">{{ userModalActionLabel }}</button>
 				</footer>
 			</div>
 		</div>
@@ -1120,7 +1387,13 @@
 		gap: 8px;
 		padding: 0 10px;
 		opacity: 0.92;
+		transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
 	}
+
+		.btn:hover {
+			transform: translateY(-1px);
+			box-shadow: 0 10px 20px rgba(40, 55, 95, 0.08);
+		}
 
 		.btn[disabled] {
 			cursor: not-allowed;
@@ -1180,6 +1453,10 @@
 		position: relative;
 	}
 
+		.modal:not(.modal--user) {
+			max-width: 760px;
+		}
+
 	.modal--user {
 		max-width: 640px;
 	}
@@ -1232,7 +1509,7 @@
 		}
 
 	.modal__body {
-		padding: 4px 18px 16px;
+		padding: 4px 24px 16px;
 		display: grid;
 		gap: 12px;
 	}
@@ -1243,6 +1520,11 @@
 		font-weight: 900;
 		color: rgba(39, 46, 86, 0.78);
 		margin: 0 0 6px;
+	}
+
+	.field input,
+	.nativeSelect {
+		box-sizing: border-box;
 	}
 
 	.field input {
@@ -1341,15 +1623,21 @@
 		}
 
 	.modal__foot {
-		padding: 14px 18px 18px;
-		display: grid;
-		grid-template-columns: 1fr 1fr;
-		gap: 12px;
+		padding: 14px 24px 20px;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		gap: 14px;
 	}
 
 	.modal__foot--right {
-		grid-template-columns: auto auto;
-		justify-content: end;
+		justify-content: flex-end;
+	}
+
+	.modal__foot .ghost,
+	.modal__foot .primary {
+		flex: 1 1 0;
+		max-width: 320px;
 	}
 
 	.ghost {
@@ -1366,6 +1654,8 @@
 		height: 36px;
 		padding: 0 14px;
 		border-radius: 10px;
+		flex: 0 0 auto !important;
+		max-width: none !important;
 	}
 
 	.primary {
@@ -1415,6 +1705,8 @@
 		border-radius: 10px;
 		background: rgba(120, 105, 235, 0.85);
 		box-shadow: 0 16px 30px rgba(88, 78, 212, 0.18);
+		flex: 0 0 auto !important;
+		max-width: none !important;
 	}
 
 	.err {
@@ -1476,12 +1768,21 @@
 		}
 
 		.modal__foot {
-			grid-template-columns: 1fr;
+			flex-direction: column;
+			align-items: stretch;
 		}
 
 		.modal__foot--right {
-			grid-template-columns: 1fr;
 			justify-content: stretch;
+		}
+
+		.modal__foot .ghost,
+		.modal__foot .primary,
+		.ghost--small,
+		.primary--solid {
+			flex: 1 1 auto !important;
+			max-width: none !important;
+			width: 100%;
 		}
 	}
 </style>

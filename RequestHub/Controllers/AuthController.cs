@@ -1,4 +1,5 @@
-﻿using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using RequestHub.Application.Services;
 using RequestHub.Infrastructure.Persistence;
@@ -15,19 +16,42 @@ public class AuthController(AppDbContext dbContext, IJwtTokenGenerator tokenGene
         public string Password { get; set; } = "";
     }
 
+    [AllowAnonymous]
     [HttpPost("login")]
     public async Task<IActionResult> Login([FromBody] LoginModel request)
     {
-        var email = (request.Email ?? "").Trim().ToLower();
-        var password = request.Password ?? "";
+        var email = (request.Email ?? string.Empty).Trim().ToLowerInvariant();
+        var password = request.Password ?? string.Empty;
 
         if (string.IsNullOrWhiteSpace(email) || string.IsNullOrWhiteSpace(password))
-            return BadRequest("Email y password requeridos");
+        {
+            return BadRequest(new
+            {
+                message = "Email y password requeridos"
+            });
+        }
 
-        var user = await dbContext.Users.FirstOrDefaultAsync(u => u.Email.ToLower() == email);
+        var user = await dbContext.Users
+            .AsNoTracking()
+            .FirstOrDefaultAsync(u => u.Email.ToLower() == email);
 
-        if (user == null || !BCrypt.Net.BCrypt.Verify(password, user.PasswordHash))
-            return Unauthorized();
+        if (user is null)
+        {
+            return Unauthorized(new
+            {
+                message = "Credenciales inválidas"
+            });
+        }
+
+        var passwordOk = BCrypt.Net.BCrypt.Verify(password, user.PasswordHash);
+
+        if (!passwordOk)
+        {
+            return Unauthorized(new
+            {
+                message = "Credenciales inválidas"
+            });
+        }
 
         var (token, expiresAtUtc) = tokenGenerator.Generate(user);
 
@@ -36,7 +60,11 @@ public class AuthController(AppDbContext dbContext, IJwtTokenGenerator tokenGene
             token,
             expiresAtUtc,
             email = user.Email,
-            role = user.Role.ToString()
+            username = user.Username,
+            fullName = user.FullName,
+            role = user.Role.ToString(),
+            areaId = user.AreaId,
+            message = "Login exitoso"
         });
     }
 }
