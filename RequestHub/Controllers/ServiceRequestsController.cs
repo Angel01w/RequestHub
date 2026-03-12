@@ -135,8 +135,23 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
     [RequestSizeLimit(10_000_000)]
     public async Task<ActionResult> Create([FromForm] CreateServiceRequestDto dto, IFormFile? attachment)
     {
-        var areaExists = await dbContext.Areas.AnyAsync(x => x.Id == dto.AreaId);
-        if (!areaExists)
+        if (dto.AreaId <= 0)
+            return BadRequest(new { message = "Área inválida." });
+
+        if (dto.RequestTypeId <= 0)
+            return BadRequest(new { message = "Tipo de solicitud inválido." });
+
+        if (dto.PriorityId <= 0)
+            return BadRequest(new { message = "Prioridad inválida." });
+
+        if (string.IsNullOrWhiteSpace(dto.Subject))
+            return BadRequest(new { message = "El asunto es requerido." });
+
+        if (string.IsNullOrWhiteSpace(dto.Description))
+            return BadRequest(new { message = "La descripción es requerida." });
+
+        var area = await dbContext.Areas.FirstOrDefaultAsync(x => x.Id == dto.AreaId);
+        if (area is null)
             return BadRequest(new { message = "Área inválida." });
 
         var type = await dbContext.RequestTypes
@@ -152,10 +167,6 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
         if (fallbackUser is null)
             return BadRequest(new { message = "No hay usuarios registrados en la base de datos." });
 
-        var currentYear = DateTime.UtcNow.Year;
-        var count = await dbContext.ServiceRequests.CountAsync(x => x.CreatedAtUtc.Year == currentYear);
-        var number = $"SOL-{currentYear}-{(count + 1):D4}";
-
         string? attachmentPath = null;
 
         if (attachment is not null && attachment.Length > 0)
@@ -163,7 +174,9 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
             var uploads = Path.Combine(env.ContentRootPath, "uploads");
             Directory.CreateDirectory(uploads);
 
-            var fileName = $"{Guid.NewGuid():N}_{Path.GetFileName(attachment.FileName)}";
+            var originalName = Path.GetFileName(attachment.FileName);
+            var extension = Path.GetExtension(originalName);
+            var fileName = $"{Guid.NewGuid():N}{extension}";
             var fullPath = Path.Combine(uploads, fileName);
 
             await using var stream = System.IO.File.Create(fullPath);
@@ -174,7 +187,7 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
 
         var request = new ServiceRequest
         {
-            Number = number,
+            Number = BuildTemporaryRequestNumber(),
             AreaId = dto.AreaId,
             RequestTypeId = dto.RequestTypeId,
             Subject = dto.Subject.Trim(),
@@ -188,6 +201,9 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
         };
 
         dbContext.ServiceRequests.Add(request);
+        await dbContext.SaveChangesAsync();
+
+        request.Number = BuildFinalRequestNumber(request.CreatedAtUtc, request.Id);
         await dbContext.SaveChangesAsync();
 
         dbContext.RequestHistories.Add(new RequestHistory
@@ -204,9 +220,20 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
         {
             id = request.Id,
             number = request.Number,
+            subject = request.Subject,
+            description = request.Description,
             status = request.Status.ToString(),
             statusId = (int)request.Status,
-            statusName = request.Status.ToString()
+            statusName = request.Status.ToString(),
+            rejectionReason = request.RejectionReason,
+            createdAtUtc = request.CreatedAtUtc,
+            areaId = request.AreaId,
+            requestTypeId = request.RequestTypeId,
+            priorityId = request.PriorityId,
+            area = area.Name,
+            priority = priority.Name,
+            requestType = type.Name,
+            assignedToUserId = request.AssignedToUserId
         });
     }
 
@@ -238,6 +265,12 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
         if (!Enum.IsDefined(typeof(TicketStatus), dto.StatusId))
             return BadRequest(new { message = "Estado inválido." });
 
+        if (string.IsNullOrWhiteSpace(dto.Subject))
+            return BadRequest(new { message = "El asunto es requerido." });
+
+        if (string.IsNullOrWhiteSpace(dto.Description))
+            return BadRequest(new { message = "La descripción es requerida." });
+
         var newStatus = (TicketStatus)dto.StatusId;
 
         if (newStatus == TicketStatus.Rechazada && string.IsNullOrWhiteSpace(dto.RejectionReason))
@@ -266,6 +299,10 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
 
             await dbContext.SaveChangesAsync();
         }
+
+        await dbContext.Entry(request).Reference(x => x.Area).LoadAsync();
+        await dbContext.Entry(request).Reference(x => x.Priority).LoadAsync();
+        await dbContext.Entry(request).Reference(x => x.RequestType).LoadAsync();
 
         return Ok(new
         {
@@ -511,5 +548,15 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
         }
 
         return NoContent();
+    }
+
+    private static string BuildTemporaryRequestNumber()
+    {
+        return $"TMP-{DateTime.UtcNow.Ticks}";
+    }
+
+    private static string BuildFinalRequestNumber(DateTime createdAtUtc, int id)
+    {
+        return $"SOL-{createdAtUtc.Year}-{id:D4}";
     }
 }
