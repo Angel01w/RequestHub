@@ -18,6 +18,7 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
     public async Task<ActionResult<IEnumerable<object>>> List([FromQuery] ServiceRequestFilterDto filter)
     {
         var query = dbContext.ServiceRequests
+            .AsNoTracking()
             .Include(x => x.Area)
             .Include(x => x.Priority)
             .Include(x => x.RequestType)
@@ -39,25 +40,31 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
             query = query.Where(x => x.CreatedAtUtc <= filter.ToUtc.Value);
 
         if (!string.IsNullOrWhiteSpace(filter.Search))
-            query = query.Where(x => x.Number.Contains(filter.Search) || x.Subject.Contains(filter.Search));
+        {
+            var search = filter.Search.Trim();
+            query = query.Where(x => x.Number.Contains(search) || x.Subject.Contains(search));
+        }
 
         var result = await query
             .OrderByDescending(x => x.CreatedAtUtc)
             .Select(x => new
             {
-                x.Id,
-                x.Number,
-                x.Subject,
-                x.Description,
-                x.Status,
-                x.CreatedAtUtc,
-                x.AreaId,
-                x.RequestTypeId,
-                x.PriorityId,
-                Area = x.Area != null ? x.Area.Name : null,
-                Priority = x.Priority != null ? x.Priority.Name : null,
-                RequestType = x.RequestType != null ? x.RequestType.Name : null,
-                x.AssignedToUserId
+                id = x.Id,
+                number = x.Number,
+                subject = x.Subject,
+                description = x.Description,
+                status = x.Status.ToString(),
+                statusId = (int)x.Status,
+                statusName = x.Status.ToString(),
+                rejectionReason = x.RejectionReason,
+                createdAtUtc = x.CreatedAtUtc,
+                areaId = x.AreaId,
+                requestTypeId = x.RequestTypeId,
+                priorityId = x.PriorityId,
+                area = x.Area != null ? x.Area.Name : null,
+                priority = x.Priority != null ? x.Priority.Name : null,
+                requestType = x.RequestType != null ? x.RequestType.Name : null,
+                assignedToUserId = x.AssignedToUserId
             })
             .ToListAsync();
 
@@ -68,50 +75,58 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
     public async Task<ActionResult<object>> Detail(int id)
     {
         var request = await dbContext.ServiceRequests
+            .AsNoTracking()
             .Include(x => x.Area)
             .Include(x => x.Priority)
             .Include(x => x.RequestType)
             .Include(x => x.Comments).ThenInclude(c => c.User)
             .Include(x => x.HistoryEntries).ThenInclude(h => h.User)
+            .Include(x => x.CreatedByUser)
+            .Include(x => x.AssignedToUser)
             .FirstOrDefaultAsync(x => x.Id == id);
 
         if (request is null)
-            return NotFound();
+            return NotFound(new { message = "Solicitud no encontrada." });
 
         return Ok(new
         {
-            request.Id,
-            request.Number,
-            request.Subject,
-            request.Description,
-            request.Status,
-            request.RejectionReason,
-            request.CreatedAtUtc,
-            request.AreaId,
-            request.RequestTypeId,
-            request.PriorityId,
-            Area = request.Area?.Name,
-            Priority = request.Priority?.Name,
-            RequestType = request.RequestType?.Name,
-            request.AttachmentPath,
-            request.AssignedToUserId,
-            Comments = request.Comments
+            id = request.Id,
+            number = request.Number,
+            subject = request.Subject,
+            description = request.Description,
+            status = request.Status.ToString(),
+            statusId = (int)request.Status,
+            statusName = request.Status.ToString(),
+            rejectionReason = request.RejectionReason,
+            createdAtUtc = request.CreatedAtUtc,
+            areaId = request.AreaId,
+            requestTypeId = request.RequestTypeId,
+            priorityId = request.PriorityId,
+            area = request.Area?.Name,
+            priority = request.Priority?.Name,
+            requestType = request.RequestType?.Name,
+            attachmentPath = request.AttachmentPath,
+            assignedToUserId = request.AssignedToUserId,
+            createdByName = request.CreatedByUser != null ? request.CreatedByUser.FullName : null,
+            assignedToName = request.AssignedToUser != null ? request.AssignedToUser.FullName : null,
+            comments = request.Comments
                 .OrderBy(c => c.CreatedAtUtc)
                 .Select(c => new
                 {
-                    c.Id,
-                    c.Text,
-                    c.CreatedAtUtc,
-                    User = c.User != null ? c.User.FullName : "Sistema"
+                    id = c.Id,
+                    text = c.Text,
+                    createdAtUtc = c.CreatedAtUtc,
+                    user = c.User != null ? c.User.FullName : "Sistema",
+                    userName = c.User != null ? c.User.FullName : "Sistema"
                 }),
-            History = request.HistoryEntries
+            history = request.HistoryEntries
                 .OrderBy(c => c.CreatedAtUtc)
                 .Select(c => new
                 {
-                    c.Id,
-                    c.Action,
-                    c.CreatedAtUtc,
-                    User = c.User != null ? c.User.FullName : "Sistema"
+                    id = c.Id,
+                    action = c.Action,
+                    createdAtUtc = c.CreatedAtUtc,
+                    user = c.User != null ? c.User.FullName : "Sistema"
                 })
         });
     }
@@ -168,6 +183,7 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
             CreatedAtUtc = DateTime.UtcNow,
             CreatedByUserId = fallbackUser.Id,
             Status = TicketStatus.Nueva,
+            RejectionReason = null,
             AttachmentPath = attachmentPath
         };
 
@@ -178,7 +194,7 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
         {
             ServiceRequestId = request.Id,
             UserId = fallbackUser.Id,
-            Action = $"Solicitud creada ({request.Number}).",
+            Action = $"Solicitud creada ({request.Number}). Estado: {request.Status}.",
             CreatedAtUtc = DateTime.UtcNow
         });
 
@@ -186,15 +202,23 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
 
         return CreatedAtAction(nameof(Detail), new { id = request.Id }, new
         {
-            request.Id,
-            request.Number
+            id = request.Id,
+            number = request.Number,
+            status = request.Status.ToString(),
+            statusId = (int)request.Status,
+            statusName = request.Status.ToString()
         });
     }
 
     [HttpPut("{id:int}")]
     public async Task<ActionResult> Update(int id, [FromBody] UpdateServiceRequestDto dto)
     {
-        var request = await dbContext.ServiceRequests.FirstOrDefaultAsync(x => x.Id == id);
+        var request = await dbContext.ServiceRequests
+            .Include(x => x.Area)
+            .Include(x => x.Priority)
+            .Include(x => x.RequestType)
+            .FirstOrDefaultAsync(x => x.Id == id);
+
         if (request is null)
             return NotFound(new { message = "Solicitud no encontrada." });
 
@@ -211,11 +235,21 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
         if (!priorityExists)
             return BadRequest(new { message = "Prioridad inválida." });
 
+        if (!Enum.IsDefined(typeof(TicketStatus), dto.StatusId))
+            return BadRequest(new { message = "Estado inválido." });
+
+        var newStatus = (TicketStatus)dto.StatusId;
+
+        if (newStatus == TicketStatus.Rechazada && string.IsNullOrWhiteSpace(dto.RejectionReason))
+            return BadRequest(new { message = "Debe especificar motivo de rechazo." });
+
         request.AreaId = dto.AreaId;
         request.RequestTypeId = dto.RequestTypeId;
         request.Subject = dto.Subject.Trim();
         request.Description = dto.Description.Trim();
         request.PriorityId = dto.PriorityId;
+        request.Status = newStatus;
+        request.RejectionReason = newStatus == TicketStatus.Rechazada ? dto.RejectionReason?.Trim() : null;
 
         await dbContext.SaveChangesAsync();
 
@@ -226,7 +260,7 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
             {
                 ServiceRequestId = request.Id,
                 UserId = fallbackUser.Id,
-                Action = "Solicitud actualizada.",
+                Action = $"Solicitud actualizada. Estado: {request.Status}.",
                 CreatedAtUtc = DateTime.UtcNow
             });
 
@@ -235,8 +269,23 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
 
         return Ok(new
         {
-            message = "Solicitud actualizada correctamente.",
-            request.Id
+            id = request.Id,
+            number = request.Number,
+            subject = request.Subject,
+            description = request.Description,
+            status = request.Status.ToString(),
+            statusId = (int)request.Status,
+            statusName = request.Status.ToString(),
+            rejectionReason = request.RejectionReason,
+            createdAtUtc = request.CreatedAtUtc,
+            areaId = request.AreaId,
+            requestTypeId = request.RequestTypeId,
+            priorityId = request.PriorityId,
+            area = request.Area?.Name,
+            priority = request.Priority?.Name,
+            requestType = request.RequestType?.Name,
+            assignedToUserId = request.AssignedToUserId,
+            message = "Solicitud actualizada correctamente."
         });
     }
 
@@ -283,7 +332,7 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
         {
             ServiceRequestId = request.Id,
             UserId = fallbackUser.Id,
-            Action = "Solicitud tomada.",
+            Action = $"Solicitud tomada. Estado: {request.Status}.",
             CreatedAtUtc = DateTime.UtcNow
         });
 
@@ -327,10 +376,18 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
             return BadRequest("Debe especificar motivo de rechazo.");
 
         request.Status = dto.Status;
-        request.RejectionReason = dto.Status == TicketStatus.Rechazada ? dto.RejectionReason : null;
+        request.RejectionReason = dto.Status == TicketStatus.Rechazada ? dto.RejectionReason?.Trim() : null;
 
         await dbContext.SaveChangesAsync();
-        return NoContent();
+
+        return Ok(new
+        {
+            id = request.Id,
+            status = request.Status.ToString(),
+            statusId = (int)request.Status,
+            statusName = request.Status.ToString(),
+            rejectionReason = request.RejectionReason
+        });
     }
 
     [HttpPost("{id:int}/comments")]
@@ -338,21 +395,121 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
     {
         var request = await dbContext.ServiceRequests.FindAsync(id);
         if (request is null)
-            return NotFound();
+            return NotFound(new { message = "Solicitud no encontrada." });
+
+        if (string.IsNullOrWhiteSpace(dto.Text))
+            return BadRequest(new { message = "El comentario es requerido." });
 
         var fallbackUser = await dbContext.Users.OrderBy(x => x.Id).FirstOrDefaultAsync();
         if (fallbackUser is null)
-            return BadRequest("No hay usuarios registrados en la base de datos.");
+            return BadRequest(new { message = "No hay usuarios registrados en la base de datos." });
 
-        dbContext.RequestComments.Add(new RequestComment
+        var comment = new RequestComment
         {
             ServiceRequestId = id,
             UserId = fallbackUser.Id,
-            Text = dto.Text,
+            Text = dto.Text.Trim(),
+            CreatedAtUtc = DateTime.UtcNow
+        };
+
+        dbContext.RequestComments.Add(comment);
+        await dbContext.SaveChangesAsync();
+
+        dbContext.RequestHistories.Add(new RequestHistory
+        {
+            ServiceRequestId = id,
+            UserId = fallbackUser.Id,
+            Action = "Comentario agregado.",
             CreatedAtUtc = DateTime.UtcNow
         });
 
         await dbContext.SaveChangesAsync();
+
+        return Ok(new
+        {
+            id = comment.Id,
+            text = comment.Text,
+            createdAtUtc = comment.CreatedAtUtc,
+            user = fallbackUser.FullName,
+            userName = fallbackUser.FullName
+        });
+    }
+
+    [HttpPut("{id:int}/comments/{commentId:int}")]
+    public async Task<ActionResult> UpdateComment(int id, int commentId, [FromBody] AddCommentDto dto)
+    {
+        if (string.IsNullOrWhiteSpace(dto.Text))
+            return BadRequest(new { message = "El comentario es requerido." });
+
+        var requestExists = await dbContext.ServiceRequests.AnyAsync(x => x.Id == id);
+        if (!requestExists)
+            return NotFound(new { message = "Solicitud no encontrada." });
+
+        var comment = await dbContext.RequestComments
+            .Include(x => x.User)
+            .FirstOrDefaultAsync(x => x.Id == commentId && x.ServiceRequestId == id);
+
+        if (comment is null)
+            return NotFound(new { message = "Comentario no encontrado." });
+
+        comment.Text = dto.Text.Trim();
+
+        await dbContext.SaveChangesAsync();
+
+        var fallbackUser = await dbContext.Users.OrderBy(x => x.Id).FirstOrDefaultAsync();
+        if (fallbackUser is not null)
+        {
+            dbContext.RequestHistories.Add(new RequestHistory
+            {
+                ServiceRequestId = id,
+                UserId = fallbackUser.Id,
+                Action = "Comentario editado.",
+                CreatedAtUtc = DateTime.UtcNow
+            });
+
+            await dbContext.SaveChangesAsync();
+        }
+
+        return Ok(new
+        {
+            id = comment.Id,
+            text = comment.Text,
+            createdAtUtc = comment.CreatedAtUtc,
+            user = comment.User != null ? comment.User.FullName : "Sistema",
+            userName = comment.User != null ? comment.User.FullName : "Sistema"
+        });
+    }
+
+    [HttpDelete("{id:int}/comments/{commentId:int}")]
+    public async Task<ActionResult> DeleteComment(int id, int commentId)
+    {
+        var requestExists = await dbContext.ServiceRequests.AnyAsync(x => x.Id == id);
+        if (!requestExists)
+            return NotFound(new { message = "Solicitud no encontrada." });
+
+        var comment = await dbContext.RequestComments
+            .FirstOrDefaultAsync(x => x.Id == commentId && x.ServiceRequestId == id);
+
+        if (comment is null)
+            return NotFound(new { message = "Comentario no encontrado." });
+
+        dbContext.RequestComments.Remove(comment);
+        await dbContext.SaveChangesAsync();
+
+        var fallbackUser = await dbContext.Users.OrderBy(x => x.Id).FirstOrDefaultAsync();
+        if (fallbackUser is not null)
+        {
+            dbContext.RequestHistories.Add(new RequestHistory
+            {
+                ServiceRequestId = id,
+                UserId = fallbackUser.Id,
+                Action = "Comentario eliminado.",
+                CreatedAtUtc = DateTime.UtcNow
+            });
+
+            await dbContext.SaveChangesAsync();
+        }
+
         return NoContent();
     }
 }

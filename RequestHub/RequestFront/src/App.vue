@@ -42,18 +42,18 @@
     }
 
     function logout() {
-        // Por ahora solo regresa al login (sin auth real)
+        
         router.push("/login");
     }
 </script>
 
 <template>
-    <!-- Login sin sidebar -->
+    
     <div v-if="isLogin" class="app-login">
         <router-view />
     </div>
 
-    <!-- Layout interno con sidebar -->
+    
     <div v-else class="app-shell">
         <div class="dash">
             <div class="layout">
@@ -97,7 +97,7 @@
                     </button>
                 </aside>
 
-                <!-- Aquí se renderiza el view actual -->
+                
                 <main class="main">
                     <router-view />
                 </main>
@@ -116,7 +116,7 @@
 </style>
 
 <style scoped>
-    /* shell wrappers */
+   
     .app-login {
         min-height: 100vh;
     }
@@ -125,7 +125,7 @@
         min-height: 100vh;
     }
 
-    /* Background estilo dashboard */
+   
     .dash {
         min-height: 100vh;
         background: radial-gradient(900px 520px at 20% 18%, rgba(116, 92, 255, 0.22), rgba(255, 255, 255, 0) 62%), radial-gradient(860px 520px at 85% 85%, rgba(179, 94, 255, 0.2), rgba(255, 255, 255, 0) 62%), linear-gradient(180deg, #f7f7ff 0%, #ece9ff 55%, #e9e7ff 100%);
