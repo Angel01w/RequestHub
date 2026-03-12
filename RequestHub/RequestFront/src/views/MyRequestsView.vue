@@ -26,7 +26,8 @@
 	const submitError = ref("");
 	const submitSuccess = ref("");
 
-	const filters = ref({
+	const 
+	= ref({
 		status: "",
 		areaId: "",
 		priority: "",

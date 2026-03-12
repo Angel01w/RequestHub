@@ -1,25 +1,87 @@
-﻿<!-- src/views/DashboardView.vue -->
-<script setup>
+﻿<script setup>
+	import { computed, onMounted, ref } from "vue"
+	import { useRouter } from "vue-router"
+	import {
+		buildUniqueAreaOptions,
+		buildUniqueStatusOptions,
+		fetchServiceRequests,
+		filterServiceRequests
+	} from "../../../Application/Services/serviceRequests.service.js"
+
+	const router = useRouter()
+
+	const isLoading = ref(false)
+	const loadError = ref("")
+	const requests = ref([])
+
+	const filters = ref({
+		search: "",
+		status: "",
+		area: "",
+		date: ""
+	})
+
 	function iconPath(name) {
 		switch (name) {
 			case "grid":
-				return "M4 4h7v7H4V4Zm9 0h7v7h-7V4ZM4 13h7v7H4v-7Zm9 0h7v7h-7v-7Z";
+				return "M4 4h7v7H4V4Zm9 0h7v7h-7V4ZM4 13h7v7H4v-7Zm9 0h7v7h-7v-7Z"
 			case "search":
-				return "M10.5 18a7.5 7.5 0 1 1 0-15 7.5 7.5 0 0 1 0 15Zm6.2-1.3 4.3 4.3";
+				return "M10.5 18a7.5 7.5 0 1 1 0-15 7.5 7.5 0 0 1 0 15Zm6.2-1.3 4.3 4.3"
 			case "calendar":
-				return "M7 3v3M17 3v3M4 8h16M5 6h14v15H5V6Z";
+				return "M7 3v3M17 3v3M4 8h16M5 6h14v15H5V6Z"
 			case "spark":
-				return "M12 2l1.4 5.1L18.5 8.5l-5.1 1.4L12 15l-1.4-5.1L5.5 8.5l5.1-1.4L12 2Z";
+				return "M12 2l1.4 5.1L18.5 8.5l-5.1 1.4L12 15l-1.4-5.1L5.5 8.5l5.1-1.4L12 2Z"
 			case "clock":
-				return "M12 21a9 9 0 1 0-9-9 9 9 0 0 0 9 9Zm0-11v5l3 2";
+				return "M12 21a9 9 0 1 0-9-9 9 9 0 0 0 9 9Zm0-11v5l3 2"
 			case "done":
-				return "M12 21a9 9 0 1 0-9-9 9 9 0 0 0 9 9Zm-4-9 2.2 2.2L16.8 7.8";
+				return "M12 21a9 9 0 1 0-9-9 9 9 0 0 0 9 9Zm-4-9 2.2 2.2L16.8 7.8"
 			case "check":
-				return "M12 21a9 9 0 1 0-9-9 9 9 0 0 0 9 9Zm-4-9 2.3 2.3L16.5 8";
+				return "M12 21a9 9 0 1 0-9-9 9 9 0 0 0 9 9Zm-4-9 2.3 2.3L16.5 8"
+			case "eye":
+				return "M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6Zm10 3a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"
 			default:
-				return "";
+				return ""
 		}
 	}
+
+	async function loadRequests() {
+		isLoading.value = true
+		loadError.value = ""
+
+		try {
+			requests.value = await fetchServiceRequests()
+		} catch (error) {
+			loadError.value = error?.message || "No se pudieron cargar las solicitudes."
+			requests.value = []
+		} finally {
+			isLoading.value = false
+		}
+	}
+
+	function openRequest(request) {
+		if (!request?.id) return
+		router.push(`/requests/${request.id}`)
+	}
+
+	const statusOptions = computed(() => buildUniqueStatusOptions(requests.value))
+	const areaOptions = computed(() => buildUniqueAreaOptions(requests.value))
+
+	const filteredRequests = computed(() =>
+		filterServiceRequests(requests.value, filters.value)
+	)
+
+	const summary = computed(() => {
+		const source = requests.value
+
+		return {
+			total: source.length,
+			inProgress: source.filter(x => x.statusKey === "in-progress").length,
+			resolved: source.filter(x => x.statusKey === "resolved").length,
+			new: source.filter(x => x.statusKey === "new").length
+		}
+	})
+
+	onMounted(loadRequests)
 </script>
 
 <template>
@@ -35,7 +97,6 @@
 				</p>
 			</div>
 
-			<!-- Cards (sin números de relleno) -->
 			<div class="cards">
 				<div class="card">
 					<div class="card__left">
@@ -43,11 +104,11 @@
 							<svg viewBox="0 0 24 24"><path :d="iconPath('check')" /></svg>
 						</div>
 						<div class="card__nums">
-							<div class="card__value">&nbsp;</div>
+							<div class="card__value">{{ summary.total }}</div>
 							<div class="card__label">Total</div>
 						</div>
 					</div>
-					<div class="card__delta">&nbsp;</div>
+					<div class="card__delta" />
 				</div>
 
 				<div class="card">
@@ -56,11 +117,11 @@
 							<svg viewBox="0 0 24 24"><path :d="iconPath('clock')" /></svg>
 						</div>
 						<div class="card__nums">
-							<div class="card__value">&nbsp;</div>
+							<div class="card__value">{{ summary.inProgress }}</div>
 							<div class="card__label">En Proceso</div>
 						</div>
 					</div>
-					<div class="card__delta">&nbsp;</div>
+					<div class="card__delta" />
 				</div>
 
 				<div class="card">
@@ -69,11 +130,11 @@
 							<svg viewBox="0 0 24 24"><path :d="iconPath('done')" /></svg>
 						</div>
 						<div class="card__nums">
-							<div class="card__value">&nbsp;</div>
+							<div class="card__value">{{ summary.resolved }}</div>
 							<div class="card__label">Resueltas</div>
 						</div>
 					</div>
-					<div class="card__delta">&nbsp;</div>
+					<div class="card__delta" />
 				</div>
 
 				<div class="card">
@@ -82,52 +143,68 @@
 							<svg viewBox="0 0 24 24"><path :d="iconPath('spark')" /></svg>
 						</div>
 						<div class="card__nums">
-							<div class="card__value">&nbsp;</div>
+							<div class="card__value">{{ summary.new }}</div>
 							<div class="card__label">Nuevas</div>
 						</div>
 					</div>
-					<div class="card__delta">&nbsp;</div>
+					<div class="card__delta" />
 				</div>
 			</div>
 
-			<!-- Filters (solo UI) -->
 			<div class="filters">
 				<div class="pill pill--search">
 					<span class="pill__icon" aria-hidden="true">
 						<svg viewBox="0 0 24 24"><path :d="iconPath('search')" /></svg>
 					</span>
-					<input class="pill__input" type="text" placeholder="Buscar por número o asunto..." />
-					<span class="pill__chev" aria-hidden="true">
-						<svg viewBox="0 0 24 24"><path d="M7 10l5 5 5-5" /></svg>
-					</span>
+					<input v-model.trim="filters.search"
+						   class="pill__input"
+						   type="text"
+						   placeholder="Buscar por número o asunto..." />
 				</div>
 
-				<button class="pill" type="button">
-					<span class="pill__txt">Todos los Estados</span>
+				<label class="pill pill--select">
+					<select v-model="filters.status" class="pill__select">
+						<option value="">Todos los Estados</option>
+						<option v-for="option in statusOptions"
+								:key="option.value"
+								:value="option.value">
+							{{ option.label }}
+						</option>
+					</select>
 					<span class="pill__chev" aria-hidden="true">
 						<svg viewBox="0 0 24 24"><path d="M7 10l5 5 5-5" /></svg>
 					</span>
-				</button>
+				</label>
 
-				<button class="pill" type="button">
-					<span class="pill__txt">Todos las Áreas</span>
+				<label class="pill pill--select">
+					<select v-model="filters.area" class="pill__select">
+						<option value="">Todas las Áreas</option>
+						<option v-for="option in areaOptions"
+								:key="option.value"
+								:value="option.value">
+							{{ option.label }}
+						</option>
+					</select>
 					<span class="pill__chev" aria-hidden="true">
 						<svg viewBox="0 0 24 24"><path d="M7 10l5 5 5-5" /></svg>
 					</span>
-				</button>
+				</label>
 
-				<button class="pill" type="button">
+				<label class="pill pill--date">
 					<span class="pill__icon" aria-hidden="true">
 						<svg viewBox="0 0 24 24"><path :d="iconPath('calendar')" /></svg>
 					</span>
-					<span class="pill__txt">Todas las fechas</span>
+					<input v-model="filters.date" class="pill__date" type="date" />
 					<span class="pill__chev" aria-hidden="true">
 						<svg viewBox="0 0 24 24"><path d="M7 10l5 5 5-5" /></svg>
 					</span>
-				</button>
+				</label>
 			</div>
 
-			<!-- Table (sin filas de relleno) -->
+			<div v-if="loadError" class="statebox statebox--error">
+				{{ loadError }}
+			</div>
+
 			<div class="tablewrap">
 				<table class="table">
 					<thead>
@@ -141,7 +218,33 @@
 							<th class="th-actions">ACCIONES</th>
 						</tr>
 					</thead>
-					<tbody />
+					<tbody v-if="!isLoading && filteredRequests.length">
+						<tr v-for="request in filteredRequests" :key="request.id || request.requestNumber">
+							<td class="cell-number">{{ request.requestNumber || "N/D" }}</td>
+							<td class="cell-subject">{{ request.subject || "Sin asunto" }}</td>
+							<td>{{ request.areaName || "N/D" }}</td>
+							<td>{{ request.priorityName || "N/D" }}</td>
+							<td>
+								<span class="status-badge"
+									  :class="`status-badge--${request.statusKey}`">
+									{{ request.statusName || "N/D" }}
+								</span>
+							</td>
+							<td>{{ request.createdAtLabel || "N/D" }}</td>
+							<td class="td-actions">
+								<button class="action-btn" type="button" @click="openRequest(request)">
+									<svg viewBox="0 0 24 24"><path :d="iconPath('eye')" /></svg>
+								</button>
+							</td>
+						</tr>
+					</tbody>
+					<tbody v-else>
+						<tr>
+							<td colspan="7" class="table-empty">
+								{{ isLoading ? "Cargando solicitudes..." : "No hay solicitudes para mostrar." }}
+							</td>
+						</tr>
+					</tbody>
 				</table>
 			</div>
 		</section>
@@ -151,13 +254,11 @@
 </template>
 
 <style scoped>
-	/* Contenedor del view dentro del layout de App.vue */
 	.dash-content {
 		min-height: 100vh;
 		position: relative;
 	}
 
-	/* Igual que antes (contenido) */
 	.content {
 		padding: 22px 22px 28px;
 	}
@@ -212,7 +313,7 @@
 		background: rgba(255, 255, 255, 0.58);
 		border: 1px solid rgba(110, 102, 182, 0.1);
 		box-shadow: 0 18px 34px rgba(40, 55, 95, 0.1);
-		padding: 14px 14px;
+		padding: 14px;
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
@@ -283,7 +384,7 @@
 	.filters {
 		margin-top: 14px;
 		display: grid;
-		grid-template-columns: 1.45fr 0.75fr 0.75fr 0.75fr;
+		grid-template-columns: 1.45fr 0.85fr 0.85fr 0.85fr;
 		gap: 10px;
 	}
 
@@ -297,12 +398,17 @@
 		display: flex;
 		align-items: center;
 		gap: 10px;
-		cursor: pointer;
 		color: rgba(39, 46, 86, 0.82);
 	}
 
 	.pill--search {
-		cursor: default;
+		cursor: text;
+	}
+
+	.pill--select,
+	.pill--date {
+		position: relative;
+		cursor: pointer;
 	}
 
 	.pill__icon {
@@ -329,7 +435,9 @@
 			stroke-linejoin: round;
 		}
 
-	.pill__input {
+	.pill__input,
+	.pill__select,
+	.pill__date {
 		border: none;
 		outline: none;
 		background: transparent;
@@ -337,19 +445,23 @@
 		min-width: 0;
 		font-size: 12px;
 		color: rgba(39, 46, 86, 0.86);
+		font-family: inherit;
 	}
 
 		.pill__input::placeholder {
 			color: rgba(39, 46, 86, 0.4);
 		}
 
-	.pill__txt {
-		font-size: 12px;
+	.pill__select {
+		appearance: none;
+		cursor: pointer;
+		padding-right: 18px;
 		font-weight: 900;
 		color: rgba(39, 46, 86, 0.78);
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
+	}
+
+	.pill__date {
+		cursor: pointer;
 	}
 
 	.pill__chev {
@@ -357,6 +469,7 @@
 		color: rgba(39, 46, 86, 0.38);
 		display: grid;
 		place-items: center;
+		pointer-events: none;
 	}
 
 		.pill__chev svg {
@@ -371,6 +484,20 @@
 			stroke-linecap: round;
 			stroke-linejoin: round;
 		}
+
+	.statebox {
+		margin-top: 12px;
+		padding: 12px 14px;
+		border-radius: 14px;
+		font-size: 13px;
+		font-weight: 700;
+	}
+
+	.statebox--error {
+		background: rgba(255, 95, 95, 0.1);
+		border: 1px solid rgba(255, 95, 95, 0.18);
+		color: #8a2c4b;
+	}
 
 	.tablewrap {
 		margin-top: 12px;
@@ -398,14 +525,93 @@
 	}
 
 	tbody td {
-		padding: 12px 14px;
+		padding: 14px;
 		font-size: 12px;
 		color: rgba(39, 46, 86, 0.86);
 		border-bottom: 1px solid rgba(110, 102, 182, 0.1);
+		vertical-align: middle;
 	}
 
-	.th-actions {
+	tbody tr:last-child td {
+		border-bottom: none;
+	}
+
+	.cell-number {
+		font-weight: 800;
+		color: #232a52;
+	}
+
+	.cell-subject {
+		max-width: 280px;
+	}
+
+	.th-actions,
+	.td-actions {
 		text-align: right;
+	}
+
+	.status-badge {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		min-height: 28px;
+		padding: 0 10px;
+		border-radius: 999px;
+		font-size: 11px;
+		font-weight: 900;
+		white-space: nowrap;
+	}
+
+	.status-badge--new {
+		background: rgba(120, 105, 235, 0.14);
+		color: #5b49c6;
+	}
+
+	.status-badge--in-progress {
+		background: rgba(255, 197, 90, 0.22);
+		color: #c8801b;
+	}
+
+	.status-badge--resolved {
+		background: rgba(60, 196, 151, 0.14);
+		color: #2c8a6a;
+	}
+
+	.status-badge--unknown {
+		background: rgba(94, 106, 210, 0.12);
+		color: #4c5699;
+	}
+
+	.action-btn {
+		width: 34px;
+		height: 34px;
+		border: 1px solid rgba(110, 102, 182, 0.14);
+		border-radius: 12px;
+		background: rgba(255, 255, 255, 0.75);
+		display: inline-grid;
+		place-items: center;
+		cursor: pointer;
+		color: #5b49c6;
+	}
+
+		.action-btn svg {
+			width: 16px;
+			height: 16px;
+		}
+
+		.action-btn path {
+			fill: none;
+			stroke: currentColor;
+			stroke-width: 2;
+			stroke-linecap: round;
+			stroke-linejoin: round;
+		}
+
+	.table-empty {
+		text-align: center;
+		padding: 28px 14px;
+		color: rgba(39, 46, 86, 0.56);
+		font-weight: 700;
 	}
 
 	.help {
