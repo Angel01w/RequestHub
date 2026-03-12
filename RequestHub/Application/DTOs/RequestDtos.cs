@@ -14,8 +14,10 @@ public record UpdateServiceRequestDto(
     int AreaId,
     int RequestTypeId,
     int PriorityId,
+    int StatusId,
     string Subject,
-    string Description
+    string Description,
+    string? RejectionReason
 );
 
 public record ChangeStatusDto(
