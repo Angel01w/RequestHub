@@ -1,4 +1,5 @@
 ﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using RequestHub.Application.DTOs;
@@ -64,7 +65,9 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
                 area = x.Area != null ? x.Area.Name : null,
                 priority = x.Priority != null ? x.Priority.Name : null,
                 requestType = x.RequestType != null ? x.RequestType.Name : null,
-                assignedToUserId = x.AssignedToUserId
+                assignedToUserId = x.AssignedToUserId,
+                attachmentPath = x.AttachmentPath,
+                attachmentName = x.AttachmentName
             })
             .ToListAsync();
 
@@ -106,6 +109,7 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
             priority = request.Priority?.Name,
             requestType = request.RequestType?.Name,
             attachmentPath = request.AttachmentPath,
+            attachmentName = request.AttachmentName,
             assignedToUserId = request.AssignedToUserId,
             createdByName = request.CreatedByUser != null ? request.CreatedByUser.FullName : null,
             assignedToName = request.AssignedToUser != null ? request.AssignedToUser.FullName : null,
@@ -168,6 +172,7 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
             return BadRequest(new { message = "No hay usuarios registrados en la base de datos." });
 
         string? attachmentPath = null;
+        string? attachmentName = null;
 
         if (attachment is not null && attachment.Length > 0)
         {
@@ -183,6 +188,7 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
             await attachment.CopyToAsync(stream);
 
             attachmentPath = $"uploads/{fileName}";
+            attachmentName = originalName;
         }
 
         var request = new ServiceRequest
@@ -197,7 +203,8 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
             CreatedByUserId = fallbackUser.Id,
             Status = TicketStatus.Nueva,
             RejectionReason = null,
-            AttachmentPath = attachmentPath
+            AttachmentPath = attachmentPath,
+            AttachmentName = attachmentName
         };
 
         dbContext.ServiceRequests.Add(request);
@@ -233,12 +240,15 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
             area = area.Name,
             priority = priority.Name,
             requestType = type.Name,
+            attachmentPath = request.AttachmentPath,
+            attachmentName = request.AttachmentName,
             assignedToUserId = request.AssignedToUserId
         });
     }
 
     [HttpPut("{id:int}")]
-    public async Task<ActionResult> Update(int id, [FromBody] UpdateServiceRequestDto dto)
+    [RequestSizeLimit(10_000_000)]
+    public async Task<ActionResult> Update(int id, [FromForm] UpdateServiceRequestDto dto)
     {
         var request = await dbContext.ServiceRequests
             .Include(x => x.Area)
@@ -258,8 +268,8 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
         if (type is null)
             return BadRequest(new { message = "Tipo de solicitud inválido para el área seleccionada." });
 
-        var priorityExists = await dbContext.Priorities.AnyAsync(x => x.Id == dto.PriorityId);
-        if (!priorityExists)
+        var priority = await dbContext.Priorities.FirstOrDefaultAsync(x => x.Id == dto.PriorityId);
+        if (priority is null)
             return BadRequest(new { message = "Prioridad inválida." });
 
         if (!Enum.IsDefined(typeof(TicketStatus), dto.StatusId))
@@ -276,6 +286,31 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
         if (newStatus == TicketStatus.Rechazada && string.IsNullOrWhiteSpace(dto.RejectionReason))
             return BadRequest(new { message = "Debe especificar motivo de rechazo." });
 
+        var attachmentPath = request.AttachmentPath;
+        var attachmentName = request.AttachmentName;
+
+        if (dto.RemoveAttachment)
+        {
+            attachmentPath = null;
+            attachmentName = null;
+        }
+        else if (dto.Attachment is not null && dto.Attachment.Length > 0)
+        {
+            var uploads = Path.Combine(env.ContentRootPath, "uploads");
+            Directory.CreateDirectory(uploads);
+
+            var originalName = Path.GetFileName(dto.Attachment.FileName);
+            var extension = Path.GetExtension(originalName);
+            var fileName = $"{Guid.NewGuid():N}{extension}";
+            var fullPath = Path.Combine(uploads, fileName);
+
+            await using var stream = System.IO.File.Create(fullPath);
+            await dto.Attachment.CopyToAsync(stream);
+
+            attachmentPath = $"uploads/{fileName}";
+            attachmentName = originalName;
+        }
+
         request.AreaId = dto.AreaId;
         request.RequestTypeId = dto.RequestTypeId;
         request.Subject = dto.Subject.Trim();
@@ -283,6 +318,8 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
         request.PriorityId = dto.PriorityId;
         request.Status = newStatus;
         request.RejectionReason = newStatus == TicketStatus.Rechazada ? dto.RejectionReason?.Trim() : null;
+        request.AttachmentPath = attachmentPath;
+        request.AttachmentName = attachmentName;
 
         await dbContext.SaveChangesAsync();
 
@@ -321,6 +358,8 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
             area = request.Area?.Name,
             priority = request.Priority?.Name,
             requestType = request.RequestType?.Name,
+            attachmentPath = request.AttachmentPath,
+            attachmentName = request.AttachmentName,
             assignedToUserId = request.AssignedToUserId,
             message = "Solicitud actualizada correctamente."
         });

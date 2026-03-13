@@ -1,7 +1,6 @@
 ﻿<script setup>
 	import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 	import { useRouter } from "vue-router";
-	import ConfirmModal from "./ConfirmModal.vue"
 
 	const router = useRouter();
 
@@ -18,6 +17,7 @@
 	const modalMode = ref("create");
 	const editingRequestId = ref(null);
 	const activeDropdown = ref(null);
+	const attachmentInputRef = ref(null);
 
 	const search = ref("");
 	const requests = ref([]);
@@ -26,8 +26,7 @@
 	const submitError = ref("");
 	const submitSuccess = ref("");
 
-	const 
-	= ref({
+	const filters = ref({
 		status: "",
 		areaId: "",
 		priority: "",
@@ -175,6 +174,27 @@
 
 	const formStatusTone = computed(() => resolveStatusTone(form.value.status));
 	const formCreatedAtPreview = computed(() => formatDateTime(form.value.createdAt || new Date()));
+	const hasExistingAttachment = computed(() => !!String(form.value.attachmentUrl || "").trim());
+	const hasAttachmentSelected = computed(() => form.value.attachment instanceof File);
+	const displayAttachmentName = computed(() => {
+		if (form.value.attachment instanceof File) return form.value.attachment.name;
+		return String(form.value.attachmentName || "").trim();
+	});
+	const displayAttachmentUrl = computed(() => {
+		const raw = String(form.value.attachmentUrl || "").trim();
+		if (!raw) return "";
+		if (/^https?:\/\//i.test(raw)) return raw;
+		return `${API_BASE}${raw.startsWith("/") ? "" : "/"}${raw}`;
+	});
+	const attachmentPreviewMode = computed(() => {
+		const fileName = displayAttachmentName.value.toLowerCase();
+		const fileUrl = displayAttachmentUrl.value.toLowerCase();
+		const target = fileName || fileUrl;
+		if (!target) return "";
+		if ([".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg"].some(ext => target.includes(ext))) return "image";
+		if (target.includes(".pdf")) return "pdf";
+		return "file";
+	});
 
 	function createDefaultForm() {
 		return {
@@ -187,8 +207,17 @@
 			createdAt: toIsoLocalDateTime(new Date()),
 			subject: "",
 			description: "",
-			attachment: null
+			attachment: null,
+			attachmentName: "",
+			attachmentUrl: "",
+			removeAttachment: false
 		};
+	}
+
+	function resetAttachmentInput() {
+		if (attachmentInputRef.value) {
+			attachmentInputRef.value.value = "";
+		}
 	}
 
 	function resetForm() {
@@ -198,6 +227,8 @@
 		submitSuccess.value = "";
 		editingRequestId.value = null;
 		modalMode.value = "create";
+		isDragging.value = false;
+		resetAttachmentInput();
 	}
 
 	function resetFilters() {
@@ -239,7 +270,11 @@
 		form.value.subject = item.subject || "";
 		form.value.description = item.description || "";
 		form.value.attachment = null;
+		form.value.attachmentName = item.attachmentName || "";
+		form.value.attachmentUrl = item.attachmentPath || item.attachmentUrl || "";
+		form.value.removeAttachment = false;
 
+		resetAttachmentInput();
 		isNewOpen.value = true;
 	}
 
@@ -260,17 +295,30 @@
 		router.back();
 	}
 
-	function onPickFile(e) {
-		if (isEditing.value) return;
-		const file = e?.target?.files?.[0] ?? null;
+	function applyPickedFile(file) {
+		if (!file) return;
 		form.value.attachment = file;
+		form.value.attachmentName = file.name;
+		form.value.removeAttachment = false;
+	}
+
+	function onPickFile(e) {
+		const file = e?.target?.files?.[0] ?? null;
+		applyPickedFile(file);
 	}
 
 	function onDrop(e) {
-		if (isEditing.value) return;
 		isDragging.value = false;
 		const file = e?.dataTransfer?.files?.[0] ?? null;
-		form.value.attachment = file;
+		applyPickedFile(file);
+	}
+
+	function removeCurrentAttachment() {
+		form.value.attachment = null;
+		form.value.attachmentName = "";
+		form.value.attachmentUrl = "";
+		form.value.removeAttachment = true;
+		resetAttachmentInput();
 	}
 
 	function toggleDropdown(name) {
@@ -640,7 +688,38 @@
 				item.MotivoRechazo,
 				""
 			),
-			createdAt
+			createdAt,
+			attachmentPath: firstNonEmpty(
+				item.attachmentPath,
+				item.AttachmentPath,
+				item.filePath,
+				item.FilePath,
+				item.attachmentUrl,
+				item.AttachmentUrl,
+				item.fileUrl,
+				item.FileUrl,
+				""
+			),
+			attachmentUrl: firstNonEmpty(
+				item.attachmentUrl,
+				item.AttachmentUrl,
+				item.fileUrl,
+				item.FileUrl,
+				item.attachmentPath,
+				item.AttachmentPath,
+				item.filePath,
+				item.FilePath,
+				""
+			),
+			attachmentName: firstNonEmpty(
+				item.attachmentName,
+				item.AttachmentName,
+				item.fileName,
+				item.FileName,
+				item.originalFileName,
+				item.OriginalFileName,
+				""
+			)
 		};
 	}
 
@@ -781,8 +860,8 @@
 			formData.append("RejectionReason", String(form.value.rejectionReason || "").trim());
 		}
 
-		if (form.value.attachment) {
-			formData.append("attachment", form.value.attachment);
+		if (form.value.attachment instanceof File) {
+			formData.append("Attachment", form.value.attachment);
 		}
 
 		return formData;
@@ -792,15 +871,25 @@
 		const priorityId = getPriorityId(form.value.priority);
 		const statusId = getStatusId(form.value.status);
 
-		return {
-			areaId: Number(form.value.areaId),
-			requestTypeId: Number(form.value.typeId),
-			priorityId,
-			statusId,
-			rejectionReason: canonicalStatusLabel(form.value.status) === "Rechazada" ? String(form.value.rejectionReason || "").trim() : null,
-			subject: form.value.subject.trim(),
-			description: form.value.description.trim()
-		};
+		const formData = new FormData();
+		formData.append("AreaId", String(Number(form.value.areaId)));
+		formData.append("RequestTypeId", String(Number(form.value.typeId)));
+		formData.append("PriorityId", String(priorityId));
+		formData.append("StatusId", String(statusId));
+		formData.append("Subject", form.value.subject.trim());
+		formData.append("Description", form.value.description.trim());
+		formData.append("CreatedAt", new Date(form.value.createdAt).toISOString());
+		formData.append("RemoveAttachment", form.value.removeAttachment ? "true" : "false");
+
+		if (canonicalStatusLabel(form.value.status) === "Rechazada") {
+			formData.append("RejectionReason", String(form.value.rejectionReason || "").trim());
+		}
+
+		if (form.value.attachment instanceof File) {
+			formData.append("Attachment", form.value.attachment);
+		}
+
+		return formData;
 	}
 
 	function validateForm() {
@@ -812,7 +901,7 @@
 		if (!form.value.subject.trim()) return "Debes ingresar el asunto.";
 		if (!form.value.description.trim()) return "Debes ingresar la descripción.";
 		if (canonicalStatusLabel(form.value.status) === "Rechazada" && !String(form.value.rejectionReason || "").trim()) return "Debes indicar el motivo del rechazo.";
-		if (!isEditing.value && form.value.attachment && form.value.attachment.size > 10 * 1024 * 1024) return "El archivo supera el máximo de 10MB.";
+		if (form.value.attachment && form.value.attachment.size > 10 * 1024 * 1024) return "El archivo supera el máximo de 10MB.";
 		return "";
 	}
 
@@ -834,22 +923,21 @@
 
 				const responsePayload = await apiRequest(`${API_BASE}/api/ServiceRequests/${editingRequestId.value}`, {
 					method: "PUT",
-					headers: {
-						"Content-Type": "application/json"
-					},
-					body: JSON.stringify(updatePayload)
+					body: updatePayload
 				});
 
 				const responseNormalized = responsePayload ? normalizeRequest(responsePayload, 0) : null;
 				const currentStatusLabel = canonicalStatusLabel(form.value.status);
 
 				syncLocalRequestState(editingRequestId.value, {
-					...updatePayload,
 					status: currentStatusLabel,
 					statusName: currentStatusLabel,
 					requestStatusName: currentStatusLabel,
 					statusId: getStatusId(currentStatusLabel),
 					rejectionReason: currentStatusLabel === "Rechazada" ? form.value.rejectionReason : "",
+					attachmentName: form.value.removeAttachment ? "" : responseNormalized?.attachmentName || displayAttachmentName.value,
+					attachmentPath: form.value.removeAttachment ? "" : responseNormalized?.attachmentPath || responseNormalized?.attachmentUrl || form.value.attachmentUrl,
+					attachmentUrl: form.value.removeAttachment ? "" : responseNormalized?.attachmentUrl || responseNormalized?.attachmentPath || form.value.attachmentUrl,
 					...(responseNormalized || {})
 				});
 
@@ -937,6 +1025,12 @@
 				return "M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6Zm10 3.2A3.2 3.2 0 1 0 12 8.8a3.2 3.2 0 0 0 0 6.4Z";
 			case "take":
 				return "M12 3v18M3 12h18";
+			case "open":
+				return "M14 5.5h5v5M19 5.5l-8.5 8.5M18.5 13.5v5h-13v-13h5";
+			case "download":
+				return "M12 4v11M7.5 10.5 12 15l4.5-4.5M5 19.5h14";
+			case "file":
+				return "M6 4.5h9l3 3v12H6zM15 4.5v3h3";
 			default:
 				return "";
 		}
@@ -1397,12 +1491,50 @@
 								<div class="formCard__sub">Puedes incluir soporte visual o documental.</div>
 							</div>
 
+							<div v-if="displayAttachmentName" class="attachedFileCard">
+								<div class="attachedFileCard__main">
+									<div class="attachedFileCard__icon">
+										<svg viewBox="0 0 24 24"><path :d="iconPath('file')" /></svg>
+									</div>
+									<div class="attachedFileCard__content">
+										<div class="attachedFileCard__label">Archivo actual</div>
+										<div class="attachedFileCard__name">{{ displayAttachmentName }}</div>
+									</div>
+								</div>
+
+								<div class="attachedFileCard__actions">
+									<a v-if="displayAttachmentUrl && !hasAttachmentSelected"
+									   class="miniBtn miniBtn--view"
+									   :href="displayAttachmentUrl"
+									   target="_blank"
+									   rel="noopener noreferrer">
+										<svg viewBox="0 0 24 24"><path :d="iconPath('open')" /></svg>
+										Abrir
+									</a>
+
+									<a v-if="displayAttachmentUrl && !hasAttachmentSelected"
+									   class="miniBtn miniBtn--download"
+									   :href="displayAttachmentUrl"
+									   download
+									   target="_blank"
+									   rel="noopener noreferrer">
+										<svg viewBox="0 0 24 24"><path :d="iconPath('download')" /></svg>
+										Descargar
+									</a>
+
+									<button class="miniBtn miniBtn--danger" type="button" @click="removeCurrentAttachment">
+										<svg viewBox="0 0 24 24"><path :d="iconPath('trash')" /></svg>
+										Quitar
+									</button>
+								</div>
+							</div>
+
 							<div class="field">
-								<label>{{ isEditing ? "Archivo Adjunto (No disponible en edición)" : "Archivo Adjunto (Opcional)" }}</label>
+								<label>{{ isEditing ? "Reemplazar Archivo (Opcional)" : "Archivo Adjunto (Opcional)" }}</label>
 								<div class="drop"
-									 :class="{ 'drop--drag': isDragging, 'drop--disabled': isEditing }"
-									 @dragenter.prevent="isEditing ? null : isDragging = true"
-									 @dragover.prevent="isEditing ? null : isDragging = true"
+									 :class="{ 'drop--drag': isDragging }"
+									 @dragenter.prevent="isDragging = true"
+									 @dragover.prevent="isDragging = true"
 									 @dragleave.prevent="isDragging = false"
 									 @drop.prevent="onDrop">
 									<div class="drop__icon" aria-hidden="true">
@@ -1410,13 +1542,21 @@
 									</div>
 									<div class="drop__txt">
 										<div class="drop__title">
-											{{ isEditing ? "La edición no permite cambiar el archivo adjunto" : form.attachment ? form.attachment.name : "Arrastra y suelta un archivo aquí o haz clic para seleccionar" }}
+											{{ hasAttachmentSelected ? form.attachment.name : isEditing ? "Selecciona un archivo para reemplazar el actual o deja el existente" : "Arrastra y suelta un archivo aquí o haz clic para seleccionar" }}
 										</div>
 										<div class="drop__sub">PDF, JPG, PNG Max: 10MB</div>
 									</div>
 
-									<input class="drop__file" type="file" accept=".pdf,.jpg,.jpeg,.png" :disabled="isEditing" @change="onPickFile" />
+									<input ref="attachmentInputRef" class="drop__file" type="file" accept=".pdf,.jpg,.jpeg,.png" @change="onPickFile" />
 								</div>
+							</div>
+
+							<div v-if="displayAttachmentUrl && attachmentPreviewMode === 'image'" class="attachmentPreview attachmentPreview--image">
+								<img :src="displayAttachmentUrl" :alt="displayAttachmentName || 'Adjunto'" />
+							</div>
+
+							<div v-else-if="displayAttachmentUrl && attachmentPreviewMode === 'pdf'" class="attachmentPreview attachmentPreview--pdf">
+								<iframe :src="displayAttachmentUrl" title="Vista previa del archivo adjunto"></iframe>
 							</div>
 						</section>
 
@@ -1845,7 +1985,8 @@
 		.btnGhost:hover,
 		.iconAction:hover,
 		.newBtn:hover,
-		.statusFormOption:hover {
+		.statusFormOption:hover,
+		.miniBtn:hover {
 			transform: translateY(-1px);
 		}
 
@@ -2736,6 +2877,114 @@
 		margin-top: 0;
 	}
 
+	.attachedFileCard {
+		display: grid;
+		gap: 12px;
+		padding: 14px;
+		border-radius: 16px;
+		border: 1px solid rgba(110, 102, 182, 0.12);
+		background: rgba(255, 255, 255, 0.62);
+		box-shadow: 0 12px 24px rgba(40, 55, 95, 0.04);
+	}
+
+	.attachedFileCard__main {
+		display: flex;
+		align-items: center;
+		gap: 12px;
+		min-width: 0;
+	}
+
+	.attachedFileCard__icon {
+		width: 40px;
+		height: 40px;
+		border-radius: 14px;
+		background: rgba(120, 105, 235, 0.14);
+		display: grid;
+		place-items: center;
+		color: rgba(120, 105, 235, 0.9);
+		flex: 0 0 auto;
+	}
+
+		.attachedFileCard__icon svg {
+			width: 18px;
+			height: 18px;
+		}
+
+		.attachedFileCard__icon path {
+			fill: none;
+			stroke: currentColor;
+			stroke-width: 2.2;
+			stroke-linecap: round;
+			stroke-linejoin: round;
+		}
+
+	.attachedFileCard__content {
+		min-width: 0;
+	}
+
+	.attachedFileCard__label {
+		font-size: 11px;
+		font-weight: 800;
+		color: rgba(39, 46, 86, 0.55);
+	}
+
+	.attachedFileCard__name {
+		margin-top: 3px;
+		font-size: 12px;
+		font-weight: 900;
+		color: rgba(39, 46, 86, 0.82);
+		word-break: break-word;
+	}
+
+	.attachedFileCard__actions {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		flex-wrap: wrap;
+	}
+
+	.miniBtn {
+		height: 34px;
+		padding: 0 12px;
+		border-radius: 12px;
+		border: 1px solid rgba(110, 102, 182, 0.12);
+		background: rgba(255, 255, 255, 0.74);
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		gap: 8px;
+		font-size: 12px;
+		font-weight: 900;
+		text-decoration: none;
+		cursor: pointer;
+		box-shadow: 0 10px 22px rgba(40, 55, 95, 0.06);
+	}
+
+		.miniBtn svg {
+			width: 14px;
+			height: 14px;
+		}
+
+		.miniBtn path {
+			fill: none;
+			stroke: currentColor;
+			stroke-width: 2.2;
+			stroke-linecap: round;
+			stroke-linejoin: round;
+		}
+
+	.miniBtn--view {
+		color: rgba(60, 110, 220, 0.95);
+	}
+
+	.miniBtn--download {
+		color: rgba(88, 78, 212, 0.95);
+	}
+
+	.miniBtn--danger {
+		color: rgba(170, 40, 80, 0.95);
+	}
+
 	.drop {
 		position: relative;
 		border-radius: 14px;
@@ -2751,10 +3000,6 @@
 	.drop--drag {
 		border-color: rgba(120, 105, 235, 0.65);
 		box-shadow: 0 0 0 4px rgba(190, 182, 255, 0.28);
-	}
-
-	.drop--disabled {
-		opacity: 0.75;
 	}
 
 	.drop__icon {
@@ -2800,6 +3045,37 @@
 		opacity: 0;
 		cursor: pointer;
 	}
+
+	.attachmentPreview {
+		border-radius: 16px;
+		overflow: hidden;
+		border: 1px solid rgba(110, 102, 182, 0.12);
+		background: rgba(255, 255, 255, 0.54);
+	}
+
+	.attachmentPreview--image {
+		padding: 12px;
+	}
+
+		.attachmentPreview--image img {
+			display: block;
+			width: 100%;
+			max-height: 320px;
+			object-fit: contain;
+			border-radius: 12px;
+			background: rgba(255, 255, 255, 0.8);
+		}
+
+	.attachmentPreview--pdf {
+		height: 360px;
+	}
+
+		.attachmentPreview--pdf iframe {
+			width: 100%;
+			height: 100%;
+			border: none;
+			background: #fff;
+		}
 
 	.actions {
 		display: grid;
@@ -2924,6 +3200,14 @@
 		thead th {
 			padding-left: 14px;
 			padding-right: 14px;
+		}
+
+		.attachedFileCard__actions {
+			width: 100%;
+		}
+
+		.miniBtn {
+			flex: 1 1 0;
 		}
 	}
 

@@ -1,5 +1,5 @@
 ﻿<script setup>
-	import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+	import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 	import { useRouter } from "vue-router";
 
 	const router = useRouter();
@@ -37,8 +37,11 @@
 	const roles = [
 		{ value: "Solicitante", label: "Solicitante", id: 1 },
 		{ value: "Gestor", label: "Gestor", id: 2 },
-		{ value: "Admin", label: "Administrador", id: 3 }
+		{ value: "Admin", label: "Administrador", id: 3 },
+		{ value: "SuperAdmin", label: "SuperAdmin", id: 4 }
 	];
+
+	const rolesWithoutArea = new Set(["Solicitante", "SuperAdmin"]);
 
 	const areaErrors = ref({ name: "" });
 	const typeErrors = ref({ name: "", areaId: "" });
@@ -73,6 +76,13 @@
 
 	const userModalTitle = computed(() => editingUserId.value ? "Editar Usuario" : "Nuevo Usuario");
 	const userModalActionLabel = computed(() => editingUserId.value ? "Guardar Cambios" : "Crear Usuario");
+
+	const selectedUserRole = computed(() => toStr(userForm.value.role).trim());
+	const userRoleRequiresArea = computed(() => {
+		const role = selectedUserRole.value;
+		return !!role && !rolesWithoutArea.has(role);
+	});
+	const showUserAreaField = computed(() => userRoleRequiresArea.value);
 
 	function joinUrl(base, path) {
 		if (!base) return path;
@@ -257,6 +267,7 @@
 		const role = userForm.value.role.trim();
 		const areaId = normalizeId(userForm.value.areaId);
 		const password = userForm.value.password ?? "";
+		const requiresArea = role && !rolesWithoutArea.has(role);
 
 		if (!fullName) {
 			userErrors.value.name = "El nombre es obligatorio.";
@@ -281,7 +292,7 @@
 			ok = false;
 		}
 
-		if (!areaId) {
+		if (requiresArea && !areaId) {
 			userErrors.value.areaId = "Selecciona un área.";
 			ok = false;
 		}
@@ -597,12 +608,15 @@
 
 		apiErrorUsers.value = "";
 
+		const normalizedRole = userForm.value.role.trim();
+		const areaId = rolesWithoutArea.has(normalizedRole) ? null : normalizeId(userForm.value.areaId);
+
 		const payload = {
 			username: userForm.value.email.trim(),
 			fullName: userForm.value.name.trim(),
 			email: userForm.value.email.trim(),
-			role: userForm.value.role,
-			areaId: normalizeId(userForm.value.areaId)
+			role: normalizedRole,
+			areaId
 		};
 
 		if (!editingUserId.value) {
@@ -682,6 +696,13 @@
 			onCancelModal();
 		}
 	}
+
+	watch(selectedUserRole, role => {
+		if (!role || rolesWithoutArea.has(role)) {
+			userForm.value.areaId = "";
+			userErrors.value.areaId = "";
+		}
+	});
 
 	onMounted(async () => {
 		window.addEventListener("keydown", onKey);
@@ -884,7 +905,7 @@
 							<td>{{ u.fullName }}</td>
 							<td>{{ u.email || u.username }}</td>
 							<td><span class="roleChip">{{ u.role }}</span></td>
-							<td>{{ areaNameById(u.areaId) }}</td>
+							<td>{{ areaNameById(u.areaId) || "Todas" }}</td>
 							<td class="td-actions">
 								<button class="btn btn--edit" type="button" @click="openEditUser(u)">
 									<span class="btn__icon" aria-hidden="true">
@@ -1059,7 +1080,7 @@
 						<div v-if="userErrors.role" class="err">{{ userErrors.role }}</div>
 					</div>
 
-					<div class="field">
+					<div v-if="showUserAreaField" class="field">
 						<label>Área</label>
 						<div class="selectWrap">
 							<select v-model="userForm.areaId" class="nativeSelect" :disabled="areas.length === 0">
@@ -1071,6 +1092,11 @@
 							</span>
 						</div>
 						<div v-if="userErrors.areaId" class="err">{{ userErrors.areaId }}</div>
+					</div>
+
+					<div v-else-if="selectedUserRole" class="roleHint">
+						<span class="roleHint__badge">{{ selectedUserRole }}</span>
+						<span>Este rol no requiere un área fija.</span>
 					</div>
 				</div>
 
@@ -1761,6 +1787,32 @@
 			stroke-linecap: round;
 			stroke-linejoin: round;
 		}
+
+	.roleHint {
+		display: flex;
+		align-items: center;
+		flex-wrap: wrap;
+		gap: 8px;
+		padding: 12px 14px;
+		border-radius: 14px;
+		border: 1px solid rgba(110, 102, 182, 0.12);
+		background: rgba(255, 255, 255, 0.6);
+		font-size: 12px;
+		font-weight: 800;
+		color: rgba(39, 46, 86, 0.72);
+	}
+
+	.roleHint__badge {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		padding: 5px 10px;
+		border-radius: 999px;
+		font-size: 11px;
+		font-weight: 900;
+		color: #fff;
+		background: rgba(120, 105, 235, 0.82);
+	}
 
 	@media (max-width: 820px) {
 		.admin {

@@ -22,6 +22,7 @@ public class ServiceRequest
     public TicketStatus Status { get; set; }
     public string? RejectionReason { get; set; }
     public string? AttachmentPath { get; set; }
+    public string? AttachmentName { get; set; }
     public ICollection<RequestComment> Comments { get; set; } = new List<RequestComment>();
     public ICollection<RequestHistory> HistoryEntries { get; set; } = new List<RequestHistory>();
 }

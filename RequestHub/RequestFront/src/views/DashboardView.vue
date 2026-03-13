@@ -44,12 +44,85 @@
 		}
 	}
 
+	function toValidDate(value) {
+		if (!value) return null
+
+		if (value instanceof Date && !Number.isNaN(value.getTime())) {
+			return value
+		}
+
+		if (typeof value === "string") {
+			const trimmed = value.trim()
+			if (!trimmed) return null
+
+			const normalized = /^\d{4}-\d{2}-\d{2}$/.test(trimmed)
+				? `${trimmed}T00:00:00`
+				: trimmed
+
+			const parsed = new Date(normalized)
+			if (!Number.isNaN(parsed.getTime())) {
+				return parsed
+			}
+		}
+
+		const parsed = new Date(value)
+		return Number.isNaN(parsed.getTime()) ? null : parsed
+	}
+
+	function formatDateLabel(value) {
+		const date = toValidDate(value)
+		if (!date) return "N/D"
+
+		return date.toLocaleDateString("es-DO", {
+			day: "2-digit",
+			month: "2-digit",
+			year: "numeric"
+		})
+	}
+
+	function formatDateInputValue(value) {
+		const date = toValidDate(value)
+		if (!date) return ""
+
+		const year = date.getFullYear()
+		const month = String(date.getMonth() + 1).padStart(2, "0")
+		const day = String(date.getDate()).padStart(2, "0")
+
+		return `${year}-${month}-${day}`
+	}
+
+	function resolveRequestDate(request) {
+		return (
+			request?.createdAt ??
+			request?.createdOn ??
+			request?.createdDate ??
+			request?.requestDate ??
+			request?.dateCreated ??
+			request?.fechaCreacion ??
+			request?.fecha ??
+			request?.submittedAt ??
+			null
+		)
+	}
+
+	function normalizeRequest(request) {
+		const rawDate = resolveRequestDate(request)
+
+		return {
+			...request,
+			rawDate,
+			createdAtLabel: request?.createdAtLabel || formatDateLabel(rawDate),
+			dateFilterValue: formatDateInputValue(rawDate)
+		}
+	}
+
 	async function loadRequests() {
 		isLoading.value = true
 		loadError.value = ""
 
 		try {
-			requests.value = await fetchServiceRequests()
+			const data = await fetchServiceRequests()
+			requests.value = Array.isArray(data) ? data.map(normalizeRequest) : []
 		} catch (error) {
 			loadError.value = error?.message || "No se pudieron cargar las solicitudes."
 			requests.value = []
@@ -66,9 +139,18 @@
 	const statusOptions = computed(() => buildUniqueStatusOptions(requests.value))
 	const areaOptions = computed(() => buildUniqueAreaOptions(requests.value))
 
-	const filteredRequests = computed(() =>
-		filterServiceRequests(requests.value, filters.value)
-	)
+	const filteredRequests = computed(() => {
+		const baseFiltered = filterServiceRequests(requests.value, {
+			search: filters.value.search,
+			status: filters.value.status,
+			area: filters.value.area,
+			date: ""
+		})
+
+		if (!filters.value.date) return baseFiltered
+
+		return baseFiltered.filter(request => request.dateFilterValue === filters.value.date)
+	})
 
 	const summary = computed(() => {
 		const source = requests.value
@@ -226,11 +308,11 @@
 							<td>{{ request.priorityName || "N/D" }}</td>
 							<td>
 								<span class="status-badge"
-									  :class="`status-badge--${request.statusKey}`">
+									  :class="`status-badge--${request.statusKey || 'unknown'}`">
 									{{ request.statusName || "N/D" }}
 								</span>
 							</td>
-							<td>{{ request.createdAtLabel || "N/D" }}</td>
+							<td>{{ request.createdAtLabel }}</td>
 							<td class="td-actions">
 								<button class="action-btn" type="button" @click="openRequest(request)">
 									<svg viewBox="0 0 24 24"><path :d="iconPath('eye')" /></svg>

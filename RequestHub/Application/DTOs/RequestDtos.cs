@@ -1,4 +1,5 @@
-﻿using RequestHub.Domain.Enums;
+﻿using Microsoft.AspNetCore.Http;
+using RequestHub.Domain.Enums;
 
 namespace RequestHub.Application.DTOs;
 
@@ -17,7 +18,9 @@ public record UpdateServiceRequestDto(
     int StatusId,
     string Subject,
     string Description,
-    string? RejectionReason
+    string? RejectionReason,
+    bool RemoveAttachment,
+    IFormFile? Attachment
 );
 
 public record ChangeStatusDto(
