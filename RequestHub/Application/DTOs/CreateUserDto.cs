@@ -1,14 +1,13 @@
 ﻿using RequestHub.Domain.Enums;
 
-namespace RequestHub.Domain.Entities;
+namespace RequestHub.Application.DTOs.Users;
 
-public class User
+public class CreateUserDto
 {
-    public int Id { get; set; }
     public string Username { get; set; } = null!;
     public string Email { get; set; } = null!;
-    public string PasswordHash { get; set; } = null!;
+    public string Password { get; set; } = null!;
     public string FullName { get; set; } = null!;
-    public string Role { get; set; } = null!;
+    public UserRole Role { get; set; }
     public int? AreaId { get; set; }
 }

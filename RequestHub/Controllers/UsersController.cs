@@ -108,14 +108,22 @@ public class UsersController(AppDbContext dbContext) : ControllerBase
         if (string.IsNullOrWhiteSpace(roleText))
             return BadRequest(new { message = "Role requerido" });
 
-        if (!Enum.TryParse<UserRole>(roleText, true, out var role))
+        if (!Enum.TryParse<UserRole>(roleText, true, out _))
             return BadRequest(new { message = "Role inválido" });
 
-        if (request.AreaId.HasValue)
+        var requiresArea = roleText.Equals("Admin", StringComparison.OrdinalIgnoreCase)
+      || roleText.Equals("Gestor", StringComparison.OrdinalIgnoreCase);
+
+        var areaId = requiresArea ? request.AreaId : null;
+
+        if (requiresArea && (!areaId.HasValue || areaId.Value <= 0))
+            return BadRequest(new { message = "Debe seleccionar un área para este rol" });
+
+        if (areaId.HasValue)
         {
             var areaExists = await dbContext.Areas
                 .AsNoTracking()
-                .AnyAsync(x => x.Id == request.AreaId.Value);
+                .AnyAsync(x => x.Id == areaId.Value);
 
             if (!areaExists)
                 return NotFound(new { message = "Área no encontrada" });
@@ -140,8 +148,8 @@ public class UsersController(AppDbContext dbContext) : ControllerBase
             Username = username,
             Email = email,
             FullName = fullName,
-            Role = role,
-            AreaId = request.AreaId,
+            Role = roleText,
+            AreaId = areaId,
             PasswordHash = BCrypt.Net.BCrypt.HashPassword(password)
         };
 
@@ -193,14 +201,22 @@ public class UsersController(AppDbContext dbContext) : ControllerBase
         if (string.IsNullOrWhiteSpace(roleText))
             return BadRequest(new { message = "Role requerido" });
 
-        if (!Enum.TryParse<UserRole>(roleText, true, out var role))
+        if (!Enum.TryParse<UserRole>(roleText, true, out _))
             return BadRequest(new { message = "Role inválido" });
 
-        if (request.AreaId.HasValue)
+        var requiresArea = roleText.Equals("Admin", StringComparison.OrdinalIgnoreCase)
+     || roleText.Equals("Gestor", StringComparison.OrdinalIgnoreCase);
+
+        var areaId = requiresArea ? request.AreaId : null;
+
+        if (requiresArea && (!areaId.HasValue || areaId.Value <= 0))
+            return BadRequest(new { message = "Debe seleccionar un área para este rol" });
+
+        if (areaId.HasValue)
         {
             var areaExists = await dbContext.Areas
                 .AsNoTracking()
-                .AnyAsync(x => x.Id == request.AreaId.Value);
+                .AnyAsync(x => x.Id == areaId.Value);
 
             if (!areaExists)
                 return NotFound(new { message = "Área no encontrada" });
@@ -223,8 +239,8 @@ public class UsersController(AppDbContext dbContext) : ControllerBase
         user.Username = username;
         user.Email = email;
         user.FullName = fullName;
-        user.Role = role;
-        user.AreaId = request.AreaId;
+        user.Role = roleText;
+        user.AreaId = areaId;
 
         await dbContext.SaveChangesAsync();
 

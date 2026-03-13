@@ -5,7 +5,7 @@
 	const route = useRoute()
 	const router = useRouter()
 
-	const API_BASE = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/+$/, "")
+	const API_BASE = (import.meta.env.VITE_API_BASE_URL || "https://localhost:7299").replace(/\/+$/, "")
 
 	const isLoading = ref(false)
 	const loadError = ref("")
@@ -43,6 +43,45 @@
 
 	const requestComments = computed(() => {
 		return Array.isArray(request.value?.comments) ? request.value.comments : []
+	})
+
+	const attachmentName = computed(() => {
+		const raw =
+			request.value?.attachmentName ||
+			request.value?.fileName ||
+			request.value?.originalFileName ||
+			request.value?.attachmentStoredFileName ||
+			extractFileNameFromPath(request.value?.attachmentPath || request.value?.attachmentUrl || "") ||
+			""
+		return cleanDisplayText(raw)
+	})
+
+	const attachmentUrl = computed(() => {
+		return buildAttachmentUrl(
+			request.value?.attachmentUrl ||
+			request.value?.attachmentPath ||
+			request.value?.fileUrl ||
+			request.value?.filePath ||
+			""
+		)
+	})
+
+	const hasAttachment = computed(() => {
+		return !!attachmentUrl.value
+	})
+
+	const attachmentExtension = computed(() => {
+		const source = `${attachmentName.value} ${request.value?.attachmentPath || ""} ${attachmentUrl.value}`.toLowerCase()
+		const match = source.match(/\.([a-z0-9]+)(?:[\?#].*)?$/i)
+		return match?.[1] || ""
+	})
+
+	const isImageAttachment = computed(() => {
+		return ["jpg", "jpeg", "png", "gif", "webp", "bmp", "svg"].includes(attachmentExtension.value)
+	})
+
+	const isPdfAttachment = computed(() => {
+		return attachmentExtension.value === "pdf"
 	})
 
 	const metadataItems = computed(() => {
@@ -127,6 +166,47 @@
 		}
 	}
 
+	function extractFileNameFromPath(value) {
+		const path = cleanDisplayText(value)
+		if (!path) return ""
+		const noQuery = path.split("?")[0].split("#")[0]
+		const segments = noQuery.split("/").filter(Boolean)
+		return decodeURIComponent(segments[segments.length - 1] || "")
+	}
+
+	function ensureLeadingSlash(value) {
+		const normalized = cleanDisplayText(value).replace(/\\/g, "/")
+		if (!normalized) return ""
+		return normalized.startsWith("/") ? normalized : `/${normalized}`
+	}
+
+	function normalizeAttachmentPath(value) {
+		const normalized = ensureLeadingSlash(value)
+		if (!normalized) return ""
+		if (/^\/https?:\/\//i.test(normalized)) {
+			return normalized.replace(/^\//, "")
+		}
+		return normalized
+	}
+
+	function buildAttachmentUrl(rawValue) {
+		const raw = cleanDisplayText(rawValue)
+		if (!raw) return ""
+
+		if (/^https?:\/\//i.test(raw)) {
+			return raw
+		}
+
+		const normalized = normalizeAttachmentPath(raw)
+		if (!normalized) return ""
+
+		if (/^https?:\/\//i.test(normalized)) {
+			return normalized
+		}
+
+		return `${API_BASE}${normalized}`
+	}
+
 	function normalizeRequest(raw) {
 		if (!raw || typeof raw !== "object") return null
 
@@ -138,6 +218,27 @@
 		const assignedToName = cleanDisplayText(raw.assignedToName || raw.assignedTo || raw.assignedUserName || raw.assignedUser)
 		const createdByName = cleanDisplayText(raw.createdByName || raw.createdBy || raw.createdByUserName || raw.createdByUser)
 		const commentsRaw = Array.isArray(raw.comments) ? raw.comments : Array.isArray(raw.Comments) ? raw.Comments : []
+		const attachmentPath = normalizeAttachmentPath(
+			raw.attachmentPath ||
+			raw.AttachmentPath ||
+			raw.filePath ||
+			raw.FilePath ||
+			raw.fileUrl ||
+			raw.FileUrl ||
+			raw.attachmentUrl ||
+			raw.AttachmentUrl
+		)
+		const normalizedAttachmentName = cleanDisplayText(
+			raw.attachmentName ||
+			raw.AttachmentName ||
+			raw.fileName ||
+			raw.FileName ||
+			raw.originalFileName ||
+			raw.OriginalFileName ||
+			raw.attachmentStoredFileName ||
+			raw.AttachmentStoredFileName ||
+			extractFileNameFromPath(attachmentPath)
+		)
 
 		return {
 			id: raw.id ?? raw.Id ?? raw.serviceRequestId ?? raw.requestId ?? null,
@@ -155,7 +256,9 @@
 			createdAt: raw.createdAtUtc ?? raw.createdAt ?? raw.CreatedAtUtc ?? raw.CreatedAt ?? null,
 			createdByName,
 			assignedToName,
-			attachmentPath: cleanDisplayText(raw.attachmentPath || raw.AttachmentPath),
+			attachmentPath,
+			attachmentUrl: buildAttachmentUrl(attachmentPath),
+			attachmentName: normalizedAttachmentName,
 			comments: commentsRaw.map(normalizeComment)
 		}
 	}
@@ -198,6 +301,14 @@
 				return "M5 4.5h11l3 3v12H5zM8 4.5v5h8v-5M9 19.5v-6h6v6"
 			case "close":
 				return "M6 6l12 12M18 6 6 18"
+			case "attachment":
+				return "M9 12.5 14.5 7a3.182 3.182 0 1 1 4.5 4.5l-7.5 7.5a5 5 0 1 1-7.07-7.07l8-8"
+			case "download":
+				return "M12 4v11M7.5 10.5 12 15l4.5-4.5M5 19.5h14"
+			case "open":
+				return "M14 5.5h5v5M19 5.5l-8.5 8.5M18.5 13.5v5h-13v-13h5"
+			case "file":
+				return "M6 4.5h9l3 3v12H6zM15 4.5v3h3"
 			default:
 				return ""
 		}
@@ -430,6 +541,75 @@
 						</div>
 					</section>
 
+					<section class="glass-card attachment-card">
+						<div class="card-title">
+							<span class="card-title__icon" aria-hidden="true">
+								<svg viewBox="0 0 24 24">
+									<path :d="iconPath('attachment')" />
+								</svg>
+							</span>
+							<h2>Archivo adjunto</h2>
+						</div>
+
+						<div v-if="hasAttachment" class="attachment-block">
+							<div class="attachment-toolbar">
+								<div class="attachment-file">
+									<div class="attachment-file__icon">
+										<svg viewBox="0 0 24 24">
+											<path :d="iconPath('file')" />
+										</svg>
+									</div>
+									<div class="attachment-file__content">
+										<div class="attachment-file__label">Archivo cargado</div>
+										<div class="attachment-file__name">
+											{{ attachmentName || "Adjunto disponible" }}
+										</div>
+										<div class="attachment-file__path">
+											{{ attachmentUrl }}
+										</div>
+									</div>
+								</div>
+
+								<div class="attachment-actions">
+									<a class="attachment-action"
+									   :href="attachmentUrl"
+									   target="_blank"
+									   rel="noopener noreferrer">
+										<svg viewBox="0 0 24 24" aria-hidden="true">
+											<path :d="iconPath('open')" />
+										</svg>
+										<span>Abrir</span>
+									</a>
+
+									<a class="attachment-action attachment-action--ghost"
+									   :href="attachmentUrl"
+									   :download="attachmentName || 'archivo.pdf'">
+										<svg viewBox="0 0 24 24" aria-hidden="true">
+											<path :d="iconPath('download')" />
+										</svg>
+										<span>Descargar</span>
+									</a>
+								</div>
+							</div>
+
+							<div v-if="isImageAttachment" class="attachment-preview attachment-preview--image">
+								<img :src="attachmentUrl" :alt="attachmentName || 'Archivo adjunto'" />
+							</div>
+
+							<div v-else-if="isPdfAttachment" class="attachment-preview attachment-preview--pdf">
+								<iframe :src="attachmentUrl" title="Vista previa del archivo adjunto"></iframe>
+							</div>
+
+							<div v-else class="attachment-fallback">
+								No hay vista previa embebida para este archivo. Usa “Abrir” o “Descargar”.
+							</div>
+						</div>
+
+						<div v-else class="empty-inline">
+							No hay archivo adjunto en esta solicitud.
+						</div>
+					</section>
+
 					<section class="glass-card comments-card">
 						<div class="card-title">
 							<span class="card-title__icon" aria-hidden="true">
@@ -557,7 +737,9 @@
 
 								<div class="meta-item__content">
 									<div class="meta-item__label">{{ item.label }}</div>
-									<div v-if="item.key === 'priority'" class="meta-priority" :class="`meta-priority--${String(item.value).toLowerCase()}`">
+									<div v-if="item.key === 'priority'"
+										 class="meta-priority"
+										 :class="`meta-priority--${String(item.value).toLowerCase()}`">
 										<span class="meta-priority__dot"></span>
 										<span>{{ item.value }}</span>
 									</div>
@@ -743,6 +925,10 @@
 		min-height: 160px;
 	}
 
+	.attachment-card {
+		padding: 18px 20px 22px;
+	}
+
 	.comments-card {
 		padding: 18px 20px 20px;
 	}
@@ -811,6 +997,158 @@
 		font-size: 17px;
 		line-height: 1.6;
 		color: #635a93;
+	}
+
+	.attachment-block {
+		display: grid;
+		gap: 14px;
+	}
+
+	.attachment-toolbar {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 14px;
+		flex-wrap: wrap;
+		padding: 14px 16px;
+		border-radius: 18px;
+		background: rgba(255, 255, 255, 0.42);
+		border: 1px solid rgba(147, 126, 235, 0.12);
+	}
+
+	.attachment-file {
+		display: flex;
+		align-items: center;
+		gap: 12px;
+		min-width: 0;
+	}
+
+	.attachment-file__icon {
+		width: 42px;
+		height: 42px;
+		border-radius: 14px;
+		background: rgba(150, 122, 255, 0.14);
+		color: rgba(96, 73, 219, 0.98);
+		display: grid;
+		place-items: center;
+		flex: 0 0 auto;
+	}
+
+		.attachment-file__icon svg {
+			width: 20px;
+			height: 20px;
+		}
+
+		.attachment-file__icon path {
+			fill: none;
+			stroke: currentColor;
+			stroke-width: 2.1;
+			stroke-linecap: round;
+			stroke-linejoin: round;
+		}
+
+	.attachment-file__content {
+		min-width: 0;
+	}
+
+	.attachment-file__label {
+		font-size: 13px;
+		color: rgba(86, 77, 138, 0.68);
+		margin-bottom: 2px;
+	}
+
+	.attachment-file__name {
+		font-size: 15px;
+		font-weight: 800;
+		color: #564d8a;
+		word-break: break-word;
+	}
+
+	.attachment-file__path {
+		margin-top: 4px;
+		font-size: 12px;
+		color: rgba(86, 77, 138, 0.52);
+		word-break: break-all;
+	}
+
+	.attachment-actions {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		flex-wrap: wrap;
+	}
+
+	.attachment-action {
+		height: 38px;
+		padding: 0 14px;
+		border-radius: 12px;
+		border: 1px solid rgba(147, 126, 235, 0.16);
+		background: rgba(120, 105, 235, 0.9);
+		color: #fff;
+		text-decoration: none;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		gap: 8px;
+		font-size: 13px;
+		font-weight: 800;
+		box-shadow: 0 14px 28px rgba(88, 78, 212, 0.14);
+	}
+
+		.attachment-action svg {
+			width: 15px;
+			height: 15px;
+		}
+
+		.attachment-action path {
+			fill: none;
+			stroke: currentColor;
+			stroke-width: 2.1;
+			stroke-linecap: round;
+			stroke-linejoin: round;
+		}
+
+	.attachment-action--ghost {
+		background: rgba(255, 255, 255, 0.76);
+		color: rgba(88, 78, 212, 0.95);
+	}
+
+	.attachment-preview {
+		border-radius: 20px;
+		overflow: hidden;
+		border: 1px solid rgba(147, 126, 235, 0.12);
+		background: rgba(255, 255, 255, 0.44);
+		box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.55);
+	}
+
+	.attachment-preview--image {
+		padding: 12px;
+	}
+
+		.attachment-preview--image img {
+			display: block;
+			max-width: 100%;
+			border-radius: 14px;
+		}
+
+	.attachment-preview--pdf {
+		height: 620px;
+	}
+
+		.attachment-preview--pdf iframe {
+			width: 100%;
+			height: 100%;
+			border: none;
+			background: #fff;
+		}
+
+	.attachment-fallback {
+		padding: 18px;
+		border-radius: 18px;
+		background: rgba(255, 255, 255, 0.42);
+		border: 1px solid rgba(147, 126, 235, 0.12);
+		font-size: 14px;
+		color: rgba(101, 93, 149, 0.72);
 	}
 
 	.comments-list {
@@ -1164,6 +1502,10 @@
 		.detail-side {
 			order: -1;
 		}
+
+		.attachment-preview--pdf {
+			height: 480px;
+		}
 	}
 
 	@media (max-width: 760px) {
@@ -1182,6 +1524,7 @@
 		}
 
 		.info-card,
+		.attachment-card,
 		.comments-card,
 		.side-card {
 			padding: 16px;
@@ -1193,6 +1536,10 @@
 
 		.comment-item {
 			grid-template-columns: 1fr;
+		}
+
+		.attachment-toolbar {
+			align-items: stretch;
 		}
 	}
 
@@ -1212,6 +1559,14 @@
 		.comment-box {
 			grid-template-columns: 24px minmax(0, 1fr) 34px;
 			padding-inline: 10px;
+		}
+
+		.attachment-actions {
+			width: 100%;
+		}
+
+		.attachment-action {
+			flex: 1 1 0;
 		}
 	}
 </style>

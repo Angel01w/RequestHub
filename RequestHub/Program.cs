@@ -1,6 +1,8 @@
 using System.Text;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.StaticFiles;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.FileProviders;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using RequestHub.Application.Services;
@@ -61,7 +63,7 @@ builder.Services
             },
             OnAuthenticationFailed = context =>
             {
-                Console.WriteLine("JWT ERROR => " + context.Exception.ToString());
+                Console.WriteLine("JWT ERROR => " + context.Exception);
                 return Task.CompletedTask;
             },
             OnTokenValidated = context =>
@@ -118,10 +120,43 @@ builder.Services.AddCors(options =>
 
 var app = builder.Build();
 
+var uploadsPath = Path.Combine(app.Environment.ContentRootPath, "uploads");
+Directory.CreateDirectory(uploadsPath);
+
+var contentTypeProvider = new FileExtensionContentTypeProvider();
+contentTypeProvider.Mappings[".pdf"] = "application/pdf";
+
 app.UseSwagger();
 app.UseSwaggerUI();
 
 app.UseCors("frontend");
+
+app.UseRouting();
+
+app.UseStaticFiles();
+
+app.UseStaticFiles(new StaticFileOptions
+{
+    FileProvider = new PhysicalFileProvider(uploadsPath),
+    RequestPath = "/uploads",
+    ContentTypeProvider = contentTypeProvider,
+    ServeUnknownFileTypes = false,
+    OnPrepareResponse = context =>
+    {
+        var extension = Path.GetExtension(context.File.Name);
+
+        if (string.Equals(extension, ".pdf", StringComparison.OrdinalIgnoreCase))
+        {
+            context.Context.Response.Headers["Content-Type"] = "application/pdf";
+            context.Context.Response.Headers["Content-Disposition"] = $"inline; filename=\"{context.File.Name}\"";
+            context.Context.Response.Headers["X-Content-Type-Options"] = "nosniff";
+            context.Context.Response.Headers["Cache-Control"] = "no-store, no-cache, must-revalidate";
+            context.Context.Response.Headers["Pragma"] = "no-cache";
+            context.Context.Response.Headers["Expires"] = "0";
+        }
+    }
+});
+
 app.UseAuthentication();
 app.UseAuthorization();
 
@@ -131,16 +166,16 @@ using (var scope = app.Services.CreateScope())
     await db.Database.MigrateAsync();
 
     var admin = await db.Users.FirstOrDefaultAsync(x =>
-        x.Username == "a.morelp" || x.Email == "angel@requesthub.com");
+        x.Username == "a.morelp" || x.Email == "a.morelp@aduanas.gob.do");
 
     if (admin == null)
     {
         admin = new User
         {
             Username = "a.morelp",
-            Email = "angel@requesthub.com",
+            Email = "a.morelp@aduanas.gob.do",
             FullName = "Angel Roberto Morel Peña",
-            Role = UserRole.Admin,
+            Role = UserRole.Admin.ToString(),
             AreaId = null,
             PasswordHash = BCrypt.Net.BCrypt.HashPassword("Angel1234")
         };
@@ -150,9 +185,9 @@ using (var scope = app.Services.CreateScope())
     else
     {
         admin.Username = "a.morelp";
-        admin.Email = "angel@requesthub.com";
+        admin.Email = "a.morelp@aduanas.gob.do";
         admin.FullName = "Angel Roberto Morel Peña";
-        admin.Role = UserRole.Admin;
+        admin.Role = UserRole.Admin.ToString();
         admin.AreaId = null;
         admin.PasswordHash = BCrypt.Net.BCrypt.HashPassword("Angel1234");
     }
