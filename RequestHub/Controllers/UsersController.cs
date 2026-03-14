@@ -8,7 +8,7 @@ using RequestHub.Infrastructure.Persistence;
 namespace RequestHub.Controllers;
 
 [ApiController]
-[AllowAnonymous]
+[Authorize]
 [Route("api/[controller]")]
 public class UsersController(AppDbContext dbContext) : ControllerBase
 {
@@ -37,6 +37,7 @@ public class UsersController(AppDbContext dbContext) : ControllerBase
     }
 
     [HttpGet]
+    [Authorize(Roles = "Admin,SuperAdmin")]
     public async Task<IActionResult> GetAll()
     {
         var users = await dbContext.Users
@@ -48,7 +49,7 @@ public class UsersController(AppDbContext dbContext) : ControllerBase
                 x.Username,
                 x.Email,
                 x.FullName,
-                role = x.Role.ToString(),
+                role = x.Role,
                 x.AreaId
             })
             .ToListAsync();
@@ -57,6 +58,7 @@ public class UsersController(AppDbContext dbContext) : ControllerBase
     }
 
     [HttpGet("{id:int}")]
+    [Authorize(Roles = "Admin,SuperAdmin")]
     public async Task<IActionResult> GetById(int id)
     {
         var user = await dbContext.Users
@@ -68,7 +70,7 @@ public class UsersController(AppDbContext dbContext) : ControllerBase
                 x.Username,
                 x.Email,
                 x.FullName,
-                role = x.Role.ToString(),
+                role = x.Role,
                 x.AreaId
             })
             .FirstOrDefaultAsync();
@@ -85,13 +87,14 @@ public class UsersController(AppDbContext dbContext) : ControllerBase
     }
 
     [HttpPost]
+    [Authorize(Roles = "Admin,SuperAdmin")]
     public async Task<IActionResult> Create([FromBody] CreateUserDto request)
     {
         var username = (request.Username ?? string.Empty).Trim();
         var email = (request.Email ?? string.Empty).Trim().ToLowerInvariant();
         var password = request.Password ?? string.Empty;
         var fullName = (request.FullName ?? string.Empty).Trim();
-        var roleText = (request.Role ?? string.Empty).Trim();
+        var roleText = NormalizeRole(request.Role);
 
         if (string.IsNullOrWhiteSpace(username))
             return BadRequest(new { message = "Username requerido" });
@@ -111,9 +114,7 @@ public class UsersController(AppDbContext dbContext) : ControllerBase
         if (!Enum.TryParse<UserRole>(roleText, true, out _))
             return BadRequest(new { message = "Role inválido" });
 
-        var requiresArea = roleText.Equals("Admin", StringComparison.OrdinalIgnoreCase)
-      || roleText.Equals("Gestor", StringComparison.OrdinalIgnoreCase);
-
+        var requiresArea = RoleRequiresArea(roleText);
         var areaId = requiresArea ? request.AreaId : null;
 
         if (requiresArea && (!areaId.HasValue || areaId.Value <= 0))
@@ -129,9 +130,11 @@ public class UsersController(AppDbContext dbContext) : ControllerBase
                 return NotFound(new { message = "Área no encontrada" });
         }
 
+        var usernameLower = username.ToLowerInvariant();
+
         var usernameExists = await dbContext.Users
             .AsNoTracking()
-            .AnyAsync(x => x.Username.ToLower() == username.ToLower());
+            .AnyAsync(x => x.Username.ToLower() == usernameLower);
 
         if (usernameExists)
             return Conflict(new { message = "El username ya existe" });
@@ -165,13 +168,14 @@ public class UsersController(AppDbContext dbContext) : ControllerBase
                 user.Username,
                 user.Email,
                 user.FullName,
-                role = user.Role.ToString(),
+                role = user.Role,
                 user.AreaId
             }
         });
     }
 
     [HttpPut("{id:int}")]
+    [Authorize(Roles = "Admin,SuperAdmin")]
     public async Task<IActionResult> Update(int id, [FromBody] UpdateUserDto request)
     {
         var user = await dbContext.Users.FirstOrDefaultAsync(x => x.Id == id);
@@ -187,7 +191,7 @@ public class UsersController(AppDbContext dbContext) : ControllerBase
         var username = (request.Username ?? string.Empty).Trim();
         var email = (request.Email ?? string.Empty).Trim().ToLowerInvariant();
         var fullName = (request.FullName ?? string.Empty).Trim();
-        var roleText = (request.Role ?? string.Empty).Trim();
+        var roleText = NormalizeRole(request.Role);
 
         if (string.IsNullOrWhiteSpace(username))
             return BadRequest(new { message = "Username requerido" });
@@ -204,9 +208,7 @@ public class UsersController(AppDbContext dbContext) : ControllerBase
         if (!Enum.TryParse<UserRole>(roleText, true, out _))
             return BadRequest(new { message = "Role inválido" });
 
-        var requiresArea = roleText.Equals("Admin", StringComparison.OrdinalIgnoreCase)
-     || roleText.Equals("Gestor", StringComparison.OrdinalIgnoreCase);
-
+        var requiresArea = RoleRequiresArea(roleText);
         var areaId = requiresArea ? request.AreaId : null;
 
         if (requiresArea && (!areaId.HasValue || areaId.Value <= 0))
@@ -222,9 +224,11 @@ public class UsersController(AppDbContext dbContext) : ControllerBase
                 return NotFound(new { message = "Área no encontrada" });
         }
 
+        var usernameLower = username.ToLowerInvariant();
+
         var usernameExists = await dbContext.Users
             .AsNoTracking()
-            .AnyAsync(x => x.Id != id && x.Username.ToLower() == username.ToLower());
+            .AnyAsync(x => x.Id != id && x.Username.ToLower() == usernameLower);
 
         if (usernameExists)
             return Conflict(new { message = "El username ya existe" });
@@ -253,13 +257,14 @@ public class UsersController(AppDbContext dbContext) : ControllerBase
                 user.Username,
                 user.Email,
                 user.FullName,
-                role = user.Role.ToString(),
+                role = user.Role,
                 user.AreaId
             }
         });
     }
 
     [HttpDelete("{id:int}")]
+    [Authorize(Roles = "SuperAdmin")]
     public async Task<IActionResult> Delete(int id)
     {
         var user = await dbContext.Users.FirstOrDefaultAsync(x => x.Id == id);
@@ -269,6 +274,18 @@ public class UsersController(AppDbContext dbContext) : ControllerBase
             return NotFound(new
             {
                 message = "Usuario no encontrado"
+            });
+        }
+
+        var currentUsername = User.FindFirst("username")?.Value ?? string.Empty;
+        var currentEmail = User.FindFirst("email")?.Value ?? string.Empty;
+
+        if ((!string.IsNullOrWhiteSpace(currentUsername) && user.Username.Equals(currentUsername, StringComparison.OrdinalIgnoreCase)) ||
+            (!string.IsNullOrWhiteSpace(currentEmail) && user.Email.Equals(currentEmail, StringComparison.OrdinalIgnoreCase)))
+        {
+            return BadRequest(new
+            {
+                message = "No puedes eliminar tu propio usuario"
             });
         }
 
@@ -282,6 +299,7 @@ public class UsersController(AppDbContext dbContext) : ControllerBase
     }
 
     [HttpPost("{id:int}/reset-password")]
+    [Authorize(Roles = "Admin,SuperAdmin")]
     public async Task<IActionResult> ResetPassword(int id, [FromBody] ResetPasswordDto request)
     {
         var user = await dbContext.Users.FirstOrDefaultAsync(x => x.Id == id);
@@ -307,5 +325,21 @@ public class UsersController(AppDbContext dbContext) : ControllerBase
         {
             message = "Contraseña actualizada correctamente"
         });
+    }
+
+    private static bool RoleRequiresArea(string role)
+    {
+        return role.Equals("Admin", StringComparison.OrdinalIgnoreCase)
+            || role.Equals("Gestor", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string NormalizeRole(string role)
+    {
+        var value = (role ?? string.Empty).Trim();
+
+        if (value.Equals("Administrador", StringComparison.OrdinalIgnoreCase))
+            return "Admin";
+
+        return value;
     }
 }

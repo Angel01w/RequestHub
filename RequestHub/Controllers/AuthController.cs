@@ -13,6 +13,7 @@ public class AuthController(AppDbContext dbContext, IJwtTokenGenerator tokenGene
     public sealed class LoginModel
     {
         public string Email { get; set; } = "";
+        public string Username { get; set; } = "";
         public string Password { get; set; } = "";
     }
 
@@ -21,19 +22,22 @@ public class AuthController(AppDbContext dbContext, IJwtTokenGenerator tokenGene
     public async Task<IActionResult> Login([FromBody] LoginModel request)
     {
         var email = (request.Email ?? string.Empty).Trim().ToLowerInvariant();
+        var username = (request.Username ?? string.Empty).Trim().ToLowerInvariant();
         var password = request.Password ?? string.Empty;
 
-        if (string.IsNullOrWhiteSpace(email) || string.IsNullOrWhiteSpace(password))
+        if ((string.IsNullOrWhiteSpace(email) && string.IsNullOrWhiteSpace(username)) || string.IsNullOrWhiteSpace(password))
         {
             return BadRequest(new
             {
-                message = "Email y password requeridos"
+                message = "Email o username y password requeridos"
             });
         }
 
         var user = await dbContext.Users
             .AsNoTracking()
-            .FirstOrDefaultAsync(u => u.Email.ToLower() == email);
+            .FirstOrDefaultAsync(u =>
+                (!string.IsNullOrWhiteSpace(email) && u.Email.ToLower() == email) ||
+                (!string.IsNullOrWhiteSpace(username) && u.Username.ToLower() == username));
 
         if (user is null)
         {
@@ -62,7 +66,7 @@ public class AuthController(AppDbContext dbContext, IJwtTokenGenerator tokenGene
             email = user.Email,
             username = user.Username,
             fullName = user.FullName,
-            role = user.Role.ToString(),
+            role = user.Role,
             areaId = user.AreaId,
             message = "Login exitoso"
         });
