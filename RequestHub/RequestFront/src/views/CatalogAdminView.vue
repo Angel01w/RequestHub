@@ -1,332 +1,345 @@
 ﻿<script setup>
-	import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
-	import { useRouter } from "vue-router";
+	import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue"
+	import { useRouter } from "vue-router"
+	import { useAuthStore } from "../stores/auth"
 
-	const router = useRouter();
+	const router = useRouter()
+	const auth = useAuthStore()
 
-	const API_BASE = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/+$/, "");
+	const API_BASE = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/+$/, "")
 
-	const activeTab = ref("area");
-	const search = ref("");
+	const activeTab = ref("area")
+	const search = ref("")
 
-	const isAreaModalOpen = ref(false);
-	const isTypeModalOpen = ref(false);
-	const isUserModalOpen = ref(false);
-	const showPassword = ref(false);
+	const isAreaModalOpen = ref(false)
+	const isTypeModalOpen = ref(false)
+	const isUserModalOpen = ref(false)
+	const showPassword = ref(false)
 
-	const areas = ref([]);
-	const requestTypes = ref([]);
-	const users = ref([]);
+	const areas = ref([])
+	const requestTypes = ref([])
+	const users = ref([])
 
-	const isLoadingAreas = ref(false);
-	const isLoadingTypes = ref(false);
-	const isLoadingUsers = ref(false);
+	const isLoadingAreas = ref(false)
+	const isLoadingTypes = ref(false)
+	const isLoadingUsers = ref(false)
 
-	const apiErrorAreas = ref("");
-	const apiErrorTypes = ref("");
-	const apiErrorUsers = ref("");
+	const apiErrorAreas = ref("")
+	const apiErrorTypes = ref("")
+	const apiErrorUsers = ref("")
 
-	const areaForm = ref({ name: "" });
-	const typeForm = ref({ name: "", areaId: "" });
-	const userForm = ref({ name: "", email: "", password: "", role: "", areaId: "" });
+	const areaForm = ref({ name: "" })
+	const typeForm = ref({ name: "", areaId: "" })
+	const userForm = ref({ name: "", email: "", password: "", role: "", areaId: "" })
 
-	const editingAreaId = ref(null);
-	const editingTypeId = ref(null);
-	const editingUserId = ref(null);
+	const editingAreaId = ref(null)
+	const editingTypeId = ref(null)
+	const editingUserId = ref(null)
 
 	const roles = [
 		{ value: "Solicitante", label: "Solicitante", id: 1 },
 		{ value: "Gestor", label: "Gestor", id: 2 },
 		{ value: "Admin", label: "Administrador", id: 3 },
 		{ value: "SuperAdmin", label: "SuperAdmin", id: 4 }
-	];
+	]
 
-	const rolesWithoutArea = new Set(["Solicitante", "SuperAdmin"]);
+	const rolesWithoutArea = new Set(["Solicitante", "SuperAdmin"])
 
-	const areaErrors = ref({ name: "" });
-	const typeErrors = ref({ name: "", areaId: "" });
-	const userErrors = ref({ name: "", email: "", password: "", role: "", areaId: "" });
+	const areaErrors = ref({ name: "" })
+	const typeErrors = ref({ name: "", areaId: "" })
+	const userErrors = ref({ name: "", email: "", password: "", role: "", areaId: "" })
 
-	const pageTitle = computed(() => "Administración");
-	const pageSubtitle = computed(() => "Gestiona los catálogos y configuraciones del sistema");
+	const pageTitle = computed(() => "Administración")
+	const pageSubtitle = computed(() => "Gestiona los catálogos y configuraciones del sistema")
+
+	const canManageCatalogs = computed(() => ["Admin", "SuperAdmin"].includes(auth.role || ""))
+	const canManageUsers = computed(() => ["Admin", "SuperAdmin"].includes(auth.role || ""))
+	const isAuthorized = computed(() => canManageCatalogs.value)
 
 	const newButtonLabel = computed(() => {
-		if (activeTab.value === "area") return "Nueva Área";
-		if (activeTab.value === "type") return "Nuevo Tipo";
-		return "Nuevo Usuario";
-	});
+		if (activeTab.value === "area") return "Nueva Área"
+		if (activeTab.value === "type") return "Nuevo Tipo"
+		return "Nuevo Usuario"
+	})
 
 	const searchPlaceholder = computed(() => {
-		if (activeTab.value === "area") return "Buscar áreas...";
-		if (activeTab.value === "type") return "Buscar tipos de solicitud...";
-		return "Buscar usuarios...";
-	});
+		if (activeTab.value === "area") return "Buscar áreas..."
+		if (activeTab.value === "type") return "Buscar tipos de solicitud..."
+		return "Buscar usuarios..."
+	})
 
 	const apiError = computed(() => {
-		if (activeTab.value === "area") return apiErrorAreas.value;
-		if (activeTab.value === "type") return apiErrorTypes.value;
-		return apiErrorUsers.value;
-	});
+		if (activeTab.value === "area") return apiErrorAreas.value
+		if (activeTab.value === "type") return apiErrorTypes.value
+		return apiErrorUsers.value
+	})
 
-	const areaModalTitle = computed(() => editingAreaId.value ? "Editar Área" : "Agregar Nueva Área");
-	const areaModalActionLabel = computed(() => editingAreaId.value ? "Guardar Cambios" : "Crear");
+	const areaModalTitle = computed(() => editingAreaId.value ? "Editar Área" : "Agregar Nueva Área")
+	const areaModalActionLabel = computed(() => editingAreaId.value ? "Guardar Cambios" : "Crear")
 
-	const typeModalTitle = computed(() => editingTypeId.value ? "Editar Tipo de Solicitud" : "Nuevo Tipo de Solicitud");
-	const typeModalActionLabel = computed(() => editingTypeId.value ? "Guardar Cambios" : "Crear Tipo");
+	const typeModalTitle = computed(() => editingTypeId.value ? "Editar Tipo de Solicitud" : "Nuevo Tipo de Solicitud")
+	const typeModalActionLabel = computed(() => editingTypeId.value ? "Guardar Cambios" : "Crear Tipo")
 
-	const userModalTitle = computed(() => editingUserId.value ? "Editar Usuario" : "Nuevo Usuario");
-	const userModalActionLabel = computed(() => editingUserId.value ? "Guardar Cambios" : "Crear Usuario");
+	const userModalTitle = computed(() => editingUserId.value ? "Editar Usuario" : "Nuevo Usuario")
+	const userModalActionLabel = computed(() => editingUserId.value ? "Guardar Cambios" : "Crear Usuario")
 
-	const selectedUserRole = computed(() => toStr(userForm.value.role).trim());
+	const selectedUserRole = computed(() => toStr(userForm.value.role).trim())
 	const userRoleRequiresArea = computed(() => {
-		const role = selectedUserRole.value;
-		return !!role && !rolesWithoutArea.has(role);
-	});
-	const showUserAreaField = computed(() => userRoleRequiresArea.value);
+		const role = selectedUserRole.value
+		return !!role && !rolesWithoutArea.has(role)
+	})
+	const showUserAreaField = computed(() => userRoleRequiresArea.value)
 
 	function joinUrl(base, path) {
-		if (!base) return path;
-		if (!path) return base;
-		if (path.startsWith("http")) return path;
-		return `${base}${path.startsWith("/") ? "" : "/"}${path}`;
+		if (!base) return path
+		if (!path) return base
+		if (path.startsWith("http")) return path
+		return `${base}${path.startsWith("/") ? "" : "/"}${path}`
 	}
 
 	async function readResponseError(res) {
-		let msg = `Error ${res.status}`;
+		let msg = `Error ${res.status}`
 
 		try {
-			const data = await res.clone().json();
-			msg = data?.message || data?.title || data?.error || data?.detail || msg;
+			const data = await res.clone().json()
+			msg = data?.message || data?.title || data?.error || data?.detail || msg
 		} catch {
 			try {
-				const text = await res.clone().text();
-				if (text) msg = text;
-			} catch { }
+				const text = await res.clone().text()
+				if (text) msg = text
+			} catch {
+			}
 		}
 
-		return msg;
+		return msg
 	}
 
 	async function api(path, { method = "GET", body } = {}) {
+		const token = auth.token || localStorage.getItem("token") || ""
+
 		const headers = {
 			Accept: "application/json"
-		};
+		}
+
+		if (token) {
+			headers.Authorization = `Bearer ${token}`
+		}
 
 		if (body !== undefined) {
-			headers["Content-Type"] = "application/json";
+			headers["Content-Type"] = "application/json"
 		}
 
 		const res = await fetch(joinUrl(API_BASE, path), {
 			method,
 			headers,
 			body: body !== undefined ? JSON.stringify(body) : undefined
-		});
+		})
 
 		if (!res.ok) {
-			throw new Error(await readResponseError(res));
+			throw new Error(await readResponseError(res))
 		}
 
-		if (res.status === 204) return null;
+		if (res.status === 204) return null
 
-		const ct = res.headers.get("content-type") || "";
-		if (ct.includes("application/json")) return await res.json();
-		return await res.text();
+		const ct = res.headers.get("content-type") || ""
+		if (ct.includes("application/json")) return await res.json()
+		return await res.text()
 	}
 
 	function onBack() {
-		router.back();
+		router.back()
 	}
 
 	function closeModals() {
-		isAreaModalOpen.value = false;
-		isTypeModalOpen.value = false;
-		isUserModalOpen.value = false;
+		isAreaModalOpen.value = false
+		isTypeModalOpen.value = false
+		isUserModalOpen.value = false
 	}
 
 	function resetAreaForm() {
-		areaForm.value = { name: "" };
-		areaErrors.value = { name: "" };
-		editingAreaId.value = null;
+		areaForm.value = { name: "" }
+		areaErrors.value = { name: "" }
+		editingAreaId.value = null
 	}
 
 	function resetTypeForm() {
-		typeForm.value = { name: "", areaId: "" };
-		typeErrors.value = { name: "", areaId: "" };
-		editingTypeId.value = null;
+		typeForm.value = { name: "", areaId: "" }
+		typeErrors.value = { name: "", areaId: "" }
+		editingTypeId.value = null
 	}
 
 	function resetUserForm() {
-		userForm.value = { name: "", email: "", password: "", role: "", areaId: "" };
-		userErrors.value = { name: "", email: "", password: "", role: "", areaId: "" };
-		showPassword.value = false;
-		editingUserId.value = null;
+		userForm.value = { name: "", email: "", password: "", role: "", areaId: "" }
+		userErrors.value = { name: "", email: "", password: "", role: "", areaId: "" }
+		showPassword.value = false
+		editingUserId.value = null
 	}
 
 	function onCancelModal() {
-		closeModals();
-		resetAreaForm();
-		resetTypeForm();
-		resetUserForm();
+		closeModals()
+		resetAreaForm()
+		resetTypeForm()
+		resetUserForm()
 	}
 
 	function openCreate() {
 		if (activeTab.value === "area") {
-			resetAreaForm();
-			isAreaModalOpen.value = true;
-			return;
+			resetAreaForm()
+			isAreaModalOpen.value = true
+			return
 		}
 
 		if (activeTab.value === "type") {
-			resetTypeForm();
-			isTypeModalOpen.value = true;
-			return;
+			resetTypeForm()
+			isTypeModalOpen.value = true
+			return
 		}
 
-		resetUserForm();
-		isUserModalOpen.value = true;
+		resetUserForm()
+		isUserModalOpen.value = true
 	}
 
 	function openEditArea(area) {
-		editingAreaId.value = normalizeId(area.id);
-		areaForm.value = { name: toStr(area.name) };
-		areaErrors.value = { name: "" };
-		isAreaModalOpen.value = true;
+		editingAreaId.value = normalizeId(area.id)
+		areaForm.value = { name: toStr(area.name) }
+		areaErrors.value = { name: "" }
+		isAreaModalOpen.value = true
 	}
 
 	function openEditType(type) {
-		editingTypeId.value = normalizeId(type.id);
+		editingTypeId.value = normalizeId(type.id)
 		typeForm.value = {
 			name: toStr(type.name),
 			areaId: normalizeId(type.areaId) ?? ""
-		};
-		typeErrors.value = { name: "", areaId: "" };
-		isTypeModalOpen.value = true;
+		}
+		typeErrors.value = { name: "", areaId: "" }
+		isTypeModalOpen.value = true
 	}
 
 	function openEditUser(user) {
-		editingUserId.value = normalizeId(user.id);
+		editingUserId.value = normalizeId(user.id)
 		userForm.value = {
 			name: toStr(user.fullName),
 			email: toStr(user.email ?? user.username),
 			password: "",
 			role: toStr(user.role),
 			areaId: normalizeId(user.areaId) ?? ""
-		};
-		userErrors.value = { name: "", email: "", password: "", role: "", areaId: "" };
-		showPassword.value = false;
-		isUserModalOpen.value = true;
+		}
+		userErrors.value = { name: "", email: "", password: "", role: "", areaId: "" }
+		showPassword.value = false
+		isUserModalOpen.value = true
 	}
 
 	function validateArea() {
-		areaErrors.value = { name: "" };
+		areaErrors.value = { name: "" }
 
-		const name = areaForm.value.name.trim();
+		const name = areaForm.value.name.trim()
 
 		if (!name) {
-			areaErrors.value.name = "El nombre es obligatorio.";
-			return false;
+			areaErrors.value.name = "El nombre es obligatorio."
+			return false
 		}
 
 		if (name.length < 2) {
-			areaErrors.value.name = "El nombre debe tener al menos 2 caracteres.";
-			return false;
+			areaErrors.value.name = "El nombre debe tener al menos 2 caracteres."
+			return false
 		}
 
-		return true;
+		return true
 	}
 
 	function validateType() {
-		typeErrors.value = { name: "", areaId: "" };
-		let ok = true;
+		typeErrors.value = { name: "", areaId: "" }
+		let ok = true
 
-		const name = typeForm.value.name.trim();
-		const areaId = normalizeId(typeForm.value.areaId);
+		const name = typeForm.value.name.trim()
+		const areaId = normalizeId(typeForm.value.areaId)
 
 		if (!name) {
-			typeErrors.value.name = "El nombre es obligatorio.";
-			ok = false;
+			typeErrors.value.name = "El nombre es obligatorio."
+			ok = false
 		} else if (name.length < 2) {
-			typeErrors.value.name = "El nombre debe tener al menos 2 caracteres.";
-			ok = false;
+			typeErrors.value.name = "El nombre debe tener al menos 2 caracteres."
+			ok = false
 		}
 
 		if (!areaId) {
-			typeErrors.value.areaId = "Selecciona un área.";
-			ok = false;
+			typeErrors.value.areaId = "Selecciona un área."
+			ok = false
 		}
 
-		return ok;
+		return ok
 	}
 
 	function validateUser() {
-		userErrors.value = { name: "", email: "", password: "", role: "", areaId: "" };
-		let ok = true;
+		userErrors.value = { name: "", email: "", password: "", role: "", areaId: "" }
+		let ok = true
 
-		const fullName = userForm.value.name.trim();
-		const email = userForm.value.email.trim();
-		const role = userForm.value.role.trim();
-		const areaId = normalizeId(userForm.value.areaId);
-		const password = userForm.value.password ?? "";
-		const requiresArea = role && !rolesWithoutArea.has(role);
+		const fullName = userForm.value.name.trim()
+		const email = userForm.value.email.trim()
+		const role = userForm.value.role.trim()
+		const areaId = normalizeId(userForm.value.areaId)
+		const password = userForm.value.password ?? ""
+		const requiresArea = role && !rolesWithoutArea.has(role)
 
 		if (!fullName) {
-			userErrors.value.name = "El nombre es obligatorio.";
-			ok = false;
+			userErrors.value.name = "El nombre es obligatorio."
+			ok = false
 		}
 
 		if (!email) {
-			userErrors.value.email = "El correo es obligatorio.";
-			ok = false;
+			userErrors.value.email = "El correo es obligatorio."
+			ok = false
 		} else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-			userErrors.value.email = "Correo inválido.";
-			ok = false;
+			userErrors.value.email = "Correo inválido."
+			ok = false
 		}
 
 		if (!editingUserId.value && !password) {
-			userErrors.value.password = "La contraseña es obligatoria.";
-			ok = false;
+			userErrors.value.password = "La contraseña es obligatoria."
+			ok = false
 		}
 
 		if (!role) {
-			userErrors.value.role = "Selecciona un rol.";
-			ok = false;
+			userErrors.value.role = "Selecciona un rol."
+			ok = false
 		}
 
 		if (requiresArea && !areaId) {
-			userErrors.value.areaId = "Selecciona un área.";
-			ok = false;
+			userErrors.value.areaId = "Selecciona un área."
+			ok = false
 		}
 
-		return ok;
+		return ok
 	}
 
 	function toStr(v) {
-		return v == null ? "" : String(v);
+		return v == null ? "" : String(v)
 	}
 
 	function normalizeId(v) {
-		return v == null || v === "" ? null : Number(v);
+		return v == null || v === "" ? null : Number(v)
 	}
 
 	function mapArea(a) {
-		const source = a?.area ?? a;
+		const source = a?.area ?? a
 		return {
 			id: source?.id ?? source?.areaId ?? source?.Id ?? source?.AreaId ?? null,
 			name: source?.name ?? source?.nombre ?? source?.Name ?? source?.Nombre ?? ""
-		};
+		}
 	}
 
 	function mapType(t) {
-		const source = t?.type ?? t;
+		const source = t?.type ?? t
 		return {
 			id: source?.id ?? source?.requestTypeId ?? source?.Id ?? source?.RequestTypeId ?? source?.TipoSolicitudId ?? source?.tipoSolicitudId ?? null,
 			name: source?.name ?? source?.nombre ?? source?.Name ?? source?.Nombre ?? "",
 			areaId: source?.areaId ?? source?.AreaId ?? source?.idArea ?? source?.IdArea ?? null
-		};
+		}
 	}
 
 	function mapUser(u) {
-		const source = u?.user ?? u;
+		const source = u?.user ?? u
 		return {
 			id: source?.id ?? source?.userId ?? source?.Id ?? source?.UserId ?? null,
 			username: source?.username ?? source?.userName ?? source?.Username ?? source?.UserName ?? "",
@@ -334,282 +347,294 @@
 			fullName: source?.fullName ?? source?.name ?? source?.FullName ?? source?.Name ?? source?.Nombre ?? "",
 			role: source?.role ?? source?.rol ?? source?.Role ?? source?.Rol ?? "",
 			areaId: source?.areaId ?? source?.AreaId ?? source?.idArea ?? source?.IdArea ?? null
-		};
+		}
 	}
 
 	function upsertAreaInList(area) {
-		const mapped = mapArea(area);
+		const mapped = mapArea(area)
 
-		if (mapped.id == null) return false;
+		if (mapped.id == null) return false
 
-		const index = areas.value.findIndex(x => Number(x.id) === Number(mapped.id));
+		const index = areas.value.findIndex(x => Number(x.id) === Number(mapped.id))
 
-		if (index >= 0) areas.value[index] = mapped;
-		else areas.value.unshift(mapped);
+		if (index >= 0) areas.value[index] = mapped
+		else areas.value.unshift(mapped)
 
-		return true;
+		return true
 	}
 
 	function upsertTypeInList(type) {
-		const mapped = mapType(type);
+		const mapped = mapType(type)
 
-		if (mapped.id == null) return false;
+		if (mapped.id == null) return false
 
-		const index = requestTypes.value.findIndex(x => Number(x.id) === Number(mapped.id));
+		const index = requestTypes.value.findIndex(x => Number(x.id) === Number(mapped.id))
 
-		if (index >= 0) requestTypes.value[index] = mapped;
-		else requestTypes.value.unshift(mapped);
+		if (index >= 0) requestTypes.value[index] = mapped
+		else requestTypes.value.unshift(mapped)
 
-		return true;
+		return true
 	}
 
 	function upsertUserInList(user) {
-		const mapped = mapUser(user);
+		const mapped = mapUser(user)
 
-		if (mapped.id == null) return false;
+		if (mapped.id == null) return false
 
-		const index = users.value.findIndex(x => Number(x.id) === Number(mapped.id));
+		const index = users.value.findIndex(x => Number(x.id) === Number(mapped.id))
 
-		if (index >= 0) users.value[index] = mapped;
-		else users.value.unshift(mapped);
+		if (index >= 0) users.value[index] = mapped
+		else users.value.unshift(mapped)
 
-		return true;
+		return true
 	}
 
 	function removeAreaFromList(id) {
-		areas.value = areas.value.filter(x => Number(x.id) !== Number(id));
+		areas.value = areas.value.filter(x => Number(x.id) !== Number(id))
 	}
 
 	function removeTypeFromList(id) {
-		requestTypes.value = requestTypes.value.filter(x => Number(x.id) !== Number(id));
+		requestTypes.value = requestTypes.value.filter(x => Number(x.id) !== Number(id))
 	}
 
 	function removeUserFromList(id) {
-		users.value = users.value.filter(x => Number(x.id) !== Number(id));
+		users.value = users.value.filter(x => Number(x.id) !== Number(id))
 	}
 
 	const areaNameById = computed(() => {
-		const map = new Map(areas.value.map(a => [toStr(a.id), toStr(a.name)]));
-		return id => map.get(toStr(id)) ?? "";
-	});
+		const map = new Map(areas.value.map(a => [toStr(a.id), toStr(a.name)]))
+		return id => map.get(toStr(id)) ?? ""
+	})
 
 	const filteredAreas = computed(() => {
-		const q = search.value.trim().toLowerCase();
-		if (!q) return areas.value;
-		return areas.value.filter(a => toStr(a?.name).toLowerCase().includes(q));
-	});
+		const q = search.value.trim().toLowerCase()
+		if (!q) return areas.value
+		return areas.value.filter(a => toStr(a?.name).toLowerCase().includes(q))
+	})
 
 	const filteredTypes = computed(() => {
-		const q = search.value.trim().toLowerCase();
-		if (!q) return requestTypes.value;
+		const q = search.value.trim().toLowerCase()
+		if (!q) return requestTypes.value
 
 		return requestTypes.value.filter(t => {
-			const n = toStr(t?.name).toLowerCase();
-			const a = toStr(areaNameById.value(t?.areaId)).toLowerCase();
-			return n.includes(q) || a.includes(q);
-		});
-	});
+			const n = toStr(t?.name).toLowerCase()
+			const a = toStr(areaNameById.value(t?.areaId)).toLowerCase()
+			return n.includes(q) || a.includes(q)
+		})
+	})
 
 	const filteredUsers = computed(() => {
-		const q = search.value.trim().toLowerCase();
-		if (!q) return users.value;
+		const q = search.value.trim().toLowerCase()
+		if (!q) return users.value
 
 		return users.value.filter(u => {
-			const full = toStr(u?.fullName).toLowerCase();
-			const usern = toStr(u?.username).toLowerCase();
-			const mail = toStr(u?.email).toLowerCase();
-			const role = toStr(u?.role).toLowerCase();
-			const area = toStr(areaNameById.value(u?.areaId)).toLowerCase();
-			return full.includes(q) || usern.includes(q) || mail.includes(q) || role.includes(q) || area.includes(q);
-		});
-	});
+			const full = toStr(u?.fullName).toLowerCase()
+			const usern = toStr(u?.username).toLowerCase()
+			const mail = toStr(u?.email).toLowerCase()
+			const role = toStr(u?.role).toLowerCase()
+			const area = toStr(areaNameById.value(u?.areaId)).toLowerCase()
+			return full.includes(q) || usern.includes(q) || mail.includes(q) || role.includes(q) || area.includes(q)
+		})
+	})
 
 	async function loadAreas() {
-		isLoadingAreas.value = true;
-		apiErrorAreas.value = "";
+		isLoadingAreas.value = true
+		apiErrorAreas.value = ""
 
 		try {
-			const data = await api("/api/Catalogs/areas");
-			const arr = Array.isArray(data) ? data : Array.isArray(data?.items) ? data.items : [];
-			areas.value = arr.map(mapArea).filter(x => x.id != null);
+			const data = await api("/api/Catalogs/areas")
+			const arr = Array.isArray(data) ? data : Array.isArray(data?.items) ? data.items : []
+			areas.value = arr.map(mapArea).filter(x => x.id != null)
 		} catch (e) {
-			apiErrorAreas.value = String(e?.message || e);
-			areas.value = [];
+			apiErrorAreas.value = String(e?.message || e)
+			areas.value = []
 		} finally {
-			isLoadingAreas.value = false;
+			isLoadingAreas.value = false
 		}
 	}
 
 	async function loadTypes() {
-		isLoadingTypes.value = true;
-		apiErrorTypes.value = "";
+		isLoadingTypes.value = true
+		apiErrorTypes.value = ""
 
 		try {
-			const data = await api("/api/Catalogs/request-types");
-			const arr = Array.isArray(data) ? data : Array.isArray(data?.items) ? data.items : [];
-			requestTypes.value = arr.map(mapType).filter(x => x.id != null);
+			const data = await api("/api/Catalogs/request-types")
+			const arr = Array.isArray(data) ? data : Array.isArray(data?.items) ? data.items : []
+			requestTypes.value = arr.map(mapType).filter(x => x.id != null)
 		} catch (e) {
-			apiErrorTypes.value = String(e?.message || e);
-			requestTypes.value = [];
+			apiErrorTypes.value = String(e?.message || e)
+			requestTypes.value = []
 		} finally {
-			isLoadingTypes.value = false;
+			isLoadingTypes.value = false
 		}
 	}
 
 	async function loadUsers() {
-		isLoadingUsers.value = true;
-		apiErrorUsers.value = "";
+		if (!canManageUsers.value) {
+			apiErrorUsers.value = "No autorizado"
+			users.value = []
+			isLoadingUsers.value = false
+			return
+		}
+
+		isLoadingUsers.value = true
+		apiErrorUsers.value = ""
 
 		try {
-			const data = await api("/api/Users");
-			const arr = Array.isArray(data) ? data : Array.isArray(data?.items) ? data.items : [];
-			users.value = arr.map(mapUser).filter(x => x.id != null);
+			const data = await api("/api/Users")
+			const arr = Array.isArray(data) ? data : Array.isArray(data?.items) ? data.items : []
+			users.value = arr.map(mapUser).filter(x => x.id != null)
 		} catch (e) {
-			apiErrorUsers.value = String(e?.message || e);
-			users.value = [];
+			apiErrorUsers.value = String(e?.message || e)
+			users.value = []
 		} finally {
-			isLoadingUsers.value = false;
+			isLoadingUsers.value = false
 		}
 	}
 
 	async function onSaveArea() {
-		if (!validateArea()) return;
+		if (!validateArea()) return
 
-		apiErrorAreas.value = "";
+		apiErrorAreas.value = ""
 
 		const payload = {
 			name: areaForm.value.name.trim()
-		};
+		}
 
 		try {
 			if (editingAreaId.value != null) {
 				const response = await api(`/api/Catalogs/areas/${editingAreaId.value}`, {
 					method: "PUT",
 					body: payload
-				});
+				})
 
-				const updated = response?.area ?? response;
+				const updated = response?.area ?? response
 
 				if (!upsertAreaInList(updated)) {
-					await loadAreas();
+					await loadAreas()
 				}
 			} else {
 				const response = await api("/api/Catalogs/areas", {
 					method: "POST",
 					body: payload
-				});
+				})
 
-				const created = response?.area ?? response;
+				const created = response?.area ?? response
 
 				if (!upsertAreaInList(created)) {
-					await loadAreas();
+					await loadAreas()
 				}
 			}
 
-			closeModals();
-			resetAreaForm();
+			closeModals()
+			resetAreaForm()
 		} catch (e) {
-			apiErrorAreas.value = String(e?.message || e);
+			apiErrorAreas.value = String(e?.message || e)
 		}
 	}
 
 	async function onDeleteArea(area) {
-		const name = toStr(area?.name).trim();
-		const id = normalizeId(area?.id);
+		const name = toStr(area?.name).trim()
+		const id = normalizeId(area?.id)
 
-		if (id == null) return;
+		if (id == null) return
 
-		const confirmed = window.confirm(`¿Deseas eliminar el área "${name}"?`);
-		if (!confirmed) return;
+		const confirmed = window.confirm(`¿Deseas eliminar el área "${name}"?`)
+		if (!confirmed) return
 
-		apiErrorAreas.value = "";
+		apiErrorAreas.value = ""
 
 		try {
-			await api(`/api/Catalogs/areas/${id}`, { method: "DELETE" });
-			removeAreaFromList(id);
+			await api(`/api/Catalogs/areas/${id}`, { method: "DELETE" })
+			removeAreaFromList(id)
 
 			if (editingAreaId.value === id) {
-				closeModals();
-				resetAreaForm();
+				closeModals()
+				resetAreaForm()
 			}
 		} catch (e) {
-			apiErrorAreas.value = String(e?.message || e);
+			apiErrorAreas.value = String(e?.message || e)
 		}
 	}
 
 	async function onSaveType() {
-		if (!validateType()) return;
+		if (!validateType()) return
 
-		apiErrorTypes.value = "";
+		apiErrorTypes.value = ""
 
 		const payload = {
 			name: typeForm.value.name.trim(),
 			areaId: normalizeId(typeForm.value.areaId)
-		};
+		}
 
 		try {
 			if (editingTypeId.value != null) {
 				const response = await api(`/api/Catalogs/request-types/${editingTypeId.value}`, {
 					method: "PUT",
 					body: payload
-				});
+				})
 
-				const updated = response?.type ?? response;
+				const updated = response?.type ?? response
 
 				if (!upsertTypeInList(updated)) {
-					await loadTypes();
+					await loadTypes()
 				}
 			} else {
 				const response = await api("/api/Catalogs/request-types", {
 					method: "POST",
 					body: payload
-				});
+				})
 
-				const created = response?.type ?? response;
+				const created = response?.type ?? response
 
 				if (!upsertTypeInList(created)) {
-					await loadTypes();
+					await loadTypes()
 				}
 			}
 
-			closeModals();
-			resetTypeForm();
+			closeModals()
+			resetTypeForm()
 		} catch (e) {
-			apiErrorTypes.value = String(e?.message || e);
+			apiErrorTypes.value = String(e?.message || e)
 		}
 	}
 
 	async function onDeleteType(type) {
-		const name = toStr(type?.name).trim();
-		const id = normalizeId(type?.id);
+		const name = toStr(type?.name).trim()
+		const id = normalizeId(type?.id)
 
-		if (id == null) return;
+		if (id == null) return
 
-		const confirmed = window.confirm(`¿Deseas eliminar el tipo de solicitud "${name}"?`);
-		if (!confirmed) return;
+		const confirmed = window.confirm(`¿Deseas eliminar el tipo de solicitud "${name}"?`)
+		if (!confirmed) return
 
-		apiErrorTypes.value = "";
+		apiErrorTypes.value = ""
 
 		try {
-			await api(`/api/Catalogs/request-types/${id}`, { method: "DELETE" });
-			removeTypeFromList(id);
+			await api(`/api/Catalogs/request-types/${id}`, { method: "DELETE" })
+			removeTypeFromList(id)
 
 			if (editingTypeId.value === id) {
-				closeModals();
-				resetTypeForm();
+				closeModals()
+				resetTypeForm()
 			}
 		} catch (e) {
-			apiErrorTypes.value = String(e?.message || e);
+			apiErrorTypes.value = String(e?.message || e)
 		}
 	}
 
 	async function onSaveUser() {
-		if (!validateUser()) return;
+		if (!canManageUsers.value) {
+			apiErrorUsers.value = "No autorizado"
+			return
+		}
 
-		apiErrorUsers.value = "";
+		if (!validateUser()) return
 
-		const normalizedRole = userForm.value.role.trim();
-		const areaId = rolesWithoutArea.has(normalizedRole) ? null : normalizeId(userForm.value.areaId);
+		apiErrorUsers.value = ""
+
+		const normalizedRole = userForm.value.role.trim()
+		const areaId = rolesWithoutArea.has(normalizedRole) ? null : normalizeId(userForm.value.areaId)
 
 		const payload = {
 			username: userForm.value.email.trim(),
@@ -617,10 +642,10 @@
 			email: userForm.value.email.trim(),
 			role: normalizedRole,
 			areaId
-		};
+		}
 
 		if (!editingUserId.value) {
-			payload.password = userForm.value.password;
+			payload.password = userForm.value.password
 		}
 
 		if (editingUserId.value != null) {
@@ -628,119 +653,146 @@
 				const response = await api(`/api/Users/${editingUserId.value}`, {
 					method: "PUT",
 					body: payload
-				});
+				})
 
-				const updated = response?.user ?? response;
+				const updated = response?.user ?? response
 
 				if (!upsertUserInList(updated)) {
-					await loadUsers();
+					await loadUsers()
 				}
 
 				if (userForm.value.password.trim()) {
 					await api(`/api/Users/${editingUserId.value}/reset-password`, {
 						method: "POST",
 						body: { newPassword: userForm.value.password }
-					});
+					})
 				}
 
-				closeModals();
-				resetUserForm();
+				closeModals()
+				resetUserForm()
 			} catch (e) {
-				apiErrorUsers.value = String(e?.message || e);
+				apiErrorUsers.value = String(e?.message || e)
 			}
 
-			return;
+			return
 		}
 
 		try {
-			const response = await api("/api/Users", { method: "POST", body: payload });
-			const created = response?.user ?? response;
+			const response = await api("/api/Users", { method: "POST", body: payload })
+			const created = response?.user ?? response
 
 			if (!upsertUserInList(created)) {
-				await loadUsers();
+				await loadUsers()
 			}
 
-			closeModals();
-			resetUserForm();
+			closeModals()
+			resetUserForm()
 		} catch (e) {
-			apiErrorUsers.value = String(e?.message || e);
+			apiErrorUsers.value = String(e?.message || e)
 		}
 	}
 
 	async function onDeleteUser(user) {
-		const name = toStr(user?.fullName || user?.username).trim();
-		const id = normalizeId(user?.id);
+		if (!canManageUsers.value) {
+			apiErrorUsers.value = "No autorizado"
+			return
+		}
 
-		if (id == null) return;
+		const name = toStr(user?.fullName || user?.username).trim()
+		const id = normalizeId(user?.id)
 
-		const confirmed = window.confirm(`¿Deseas eliminar el usuario "${name}"?`);
-		if (!confirmed) return;
+		if (id == null) return
 
-		apiErrorUsers.value = "";
+		const confirmed = window.confirm(`¿Deseas eliminar el usuario "${name}"?`)
+		if (!confirmed) return
+
+		apiErrorUsers.value = ""
 
 		try {
-			await api(`/api/Users/${id}`, { method: "DELETE" });
-			removeUserFromList(id);
+			await api(`/api/Users/${id}`, { method: "DELETE" })
+			removeUserFromList(id)
 
 			if (editingUserId.value === id) {
-				closeModals();
-				resetUserForm();
+				closeModals()
+				resetUserForm()
 			}
 		} catch (e) {
-			apiErrorUsers.value = String(e?.message || e);
+			apiErrorUsers.value = String(e?.message || e)
 		}
 	}
 
 	function onKey(e) {
 		if (e.key === "Escape" && (isAreaModalOpen.value || isTypeModalOpen.value || isUserModalOpen.value)) {
-			onCancelModal();
+			onCancelModal()
 		}
 	}
 
 	watch(selectedUserRole, role => {
 		if (!role || rolesWithoutArea.has(role)) {
-			userForm.value.areaId = "";
-			userErrors.value.areaId = "";
+			userForm.value.areaId = ""
+			userErrors.value.areaId = ""
 		}
-	});
+	})
+
+	watch(activeTab, async (tab) => {
+		if (tab === "area" && areas.value.length === 0 && !isLoadingAreas.value) {
+			await loadAreas()
+			return
+		}
+
+		if (tab === "type" && requestTypes.value.length === 0 && !isLoadingTypes.value) {
+			await loadTypes()
+			return
+		}
+
+		if (tab === "user" && users.value.length === 0 && !isLoadingUsers.value) {
+			await loadUsers()
+		}
+	})
 
 	onMounted(async () => {
-		window.addEventListener("keydown", onKey);
-		await Promise.all([loadAreas(), loadTypes(), loadUsers()]);
-	});
+		window.addEventListener("keydown", onKey)
+
+		if (!auth.token) {
+			router.replace("/login")
+			return
+		}
+
+		await Promise.all([loadAreas(), loadTypes(), loadUsers()])
+	})
 
 	onBeforeUnmount(() => {
-		window.removeEventListener("keydown", onKey);
-	});
+		window.removeEventListener("keydown", onKey)
+	})
 
 	function iconPath(name) {
 		switch (name) {
 			case "arrowLeft":
-				return "M15 18l-6-6 6-6";
+				return "M15 18l-6-6 6-6"
 			case "plus":
-				return "M12 5v14M5 12h14";
+				return "M12 5v14M5 12h14"
 			case "search":
-				return "M10.5 18a7.5 7.5 0 1 1 0-15 7.5 7.5 0 0 1 0 15Zm6.2-1.3 4.3 4.3";
+				return "M10.5 18a7.5 7.5 0 1 1 0-15 7.5 7.5 0 0 1 0 15Zm6.2-1.3 4.3 4.3"
 			case "chev":
-				return "M7 10l5 5 5-5";
+				return "M7 10l5 5 5-5"
 			case "pencil":
-				return "M4 20h4l10-10-4-4L4 16v4Zm9-13 4 4";
+				return "M4 20h4l10-10-4-4L4 16v4Zm9-13 4 4"
 			case "trash":
-				return "M6 7h12M9 7V5h6v2M8 7l1 13h6l1-13";
+				return "M6 7h12M9 7V5h6v2M8 7l1 13h6l1-13"
 			case "x":
-				return "M6 6l12 12M18 6L6 18";
+				return "M6 6l12 12M18 6L6 18"
 			case "user":
-				return "M12 12a4 4 0 1 0-4-4 4 4 0 0 0 4 4Zm-8 8a8 8 0 0 1 16 0";
+				return "M12 12a4 4 0 1 0-4-4 4 4 0 0 0 4 4Zm-8 8a8 8 0 0 1 16 0"
 			case "mail":
-				return "M4 6h16v12H4V6Zm0 1 8 6 8-6";
+				return "M4 6h16v12H4V6Zm0 1 8 6 8-6"
 			case "lock":
-				return "M7 11V8a5 5 0 0 1 10 0v3M6 11h12v10H6V11Z";
+				return "M7 11V8a5 5 0 0 1 10 0v3M6 11h12v10H6V11Z"
 			case "eye":
-				return "M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Zm10 3a3 3 0 1 0-3-3 3 3 0 0 0 3 3Z";
+				return "M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Zm10 3a3 3 0 1 0-3-3 3 3 0 0 0 3 3Z"
 			case "paperPlane":
-				return "M21 3 3 11l7 2 2 7 9-17ZM10 13l11-10";
+				return "M21 3 3 11l7 2 2 7 9-17ZM10 13l11-10"
 			default:
-				return "";
+				return ""
 		}
 	}
 </script>
@@ -791,7 +843,7 @@
 					</button>
 				</div>
 
-				<button class="new" type="button" @click="openCreate">
+				<button class="new" type="button" @click="openCreate" :disabled="!isAuthorized || (activeTab === 'user' && !canManageUsers)">
 					<span class="new__icon" aria-hidden="true">
 						<svg viewBox="0 0 24 24"><path :d="iconPath('plus')" /></svg>
 					</span>
@@ -1255,6 +1307,11 @@
 		gap: 10px;
 		box-shadow: 0 18px 28px rgba(88, 78, 212, 0.22);
 	}
+
+		.new:disabled {
+			cursor: not-allowed;
+			opacity: 0.7;
+		}
 
 	.new__icon svg,
 	.new__chev svg {

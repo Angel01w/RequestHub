@@ -31,8 +31,25 @@ function firstNonEmpty(...values) {
 
 function normalizeDateValue(value) {
 	if (!value) return null
-	const date = new Date(value)
-	return Number.isNaN(date.getTime()) ? null : date
+
+	if (value instanceof Date) {
+		return Number.isNaN(value.getTime()) ? null : value
+	}
+
+	if (typeof value === "string") {
+		const trimmed = value.trim()
+		if (!trimmed) return null
+
+		const normalized = /^\d{4}-\d{2}-\d{2}$/.test(trimmed)
+			? `${trimmed}T00:00:00`
+			: trimmed
+
+		const parsed = new Date(normalized)
+		return Number.isNaN(parsed.getTime()) ? null : parsed
+	}
+
+	const parsed = new Date(value)
+	return Number.isNaN(parsed.getTime()) ? null : parsed
 }
 
 function formatDate(value) {
@@ -143,9 +160,16 @@ export function normalizeServiceRequest(item = {}) {
 
 	const createdAtRaw =
 		item.createdAt ??
+		item.createdAtUtc ??
 		item.creationDate ??
 		item.createdDate ??
+		item.createdOn ??
+		item.createdDateUtc ??
+		item.requestDate ??
+		item.dateCreated ??
+		item.submittedAt ??
 		item.date ??
+		item.fechaCreacion ??
 		item.fecha
 
 	const createdAt = normalizeDateValue(createdAtRaw)

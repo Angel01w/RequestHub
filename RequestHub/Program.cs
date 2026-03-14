@@ -22,12 +22,21 @@ var jwt = builder.Configuration.GetSection(JwtOptions.SectionName).Get<JwtOption
           ?? throw new InvalidOperationException("La sección Jwt no está configurada.");
 
 if (string.IsNullOrWhiteSpace(jwt.Key))
-{
     throw new InvalidOperationException("Jwt:Key es requerido.");
-}
+
+if (string.IsNullOrWhiteSpace(jwt.Issuer))
+    throw new InvalidOperationException("Jwt:Issuer es requerido.");
+
+if (string.IsNullOrWhiteSpace(jwt.Audience))
+    throw new InvalidOperationException("Jwt:Audience es requerido.");
+
+var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
+
+if (string.IsNullOrWhiteSpace(connectionString))
+    throw new InvalidOperationException("ConnectionStrings:DefaultConnection es requerido.");
 
 builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+    options.UseSqlServer(connectionString));
 
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ICurrentUserAccessor, CurrentUserAccessor>();
@@ -44,8 +53,10 @@ builder.Services
 
         options.TokenValidationParameters = new TokenValidationParameters
         {
-            ValidateIssuer = false,
-            ValidateAudience = false,
+            ValidateIssuer = true,
+            ValidIssuer = jwt.Issuer,
+            ValidateAudience = true,
+            ValidAudience = jwt.Audience,
             ValidateLifetime = true,
             ValidateIssuerSigningKey = true,
             IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwt.Key)),
@@ -56,19 +67,33 @@ builder.Services
 
         options.Events = new JwtBearerEvents
         {
-            OnMessageReceived = context =>
+            OnChallenge = context =>
             {
-                Console.WriteLine("AUTH HEADER => " + context.Request.Headers.Authorization);
+                if (!context.Response.HasStarted)
+                {
+                    context.HandleResponse();
+                    context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                    context.Response.ContentType = "application/json";
+                    return context.Response.WriteAsJsonAsync(new
+                    {
+                        message = "No autorizado"
+                    });
+                }
+
                 return Task.CompletedTask;
             },
-            OnAuthenticationFailed = context =>
+            OnForbidden = context =>
             {
-                Console.WriteLine("JWT ERROR => " + context.Exception);
-                return Task.CompletedTask;
-            },
-            OnTokenValidated = context =>
-            {
-                Console.WriteLine("JWT OK");
+                if (!context.Response.HasStarted)
+                {
+                    context.Response.StatusCode = StatusCodes.Status403Forbidden;
+                    context.Response.ContentType = "application/json";
+                    return context.Response.WriteAsJsonAsync(new
+                    {
+                        message = "Acceso denegado"
+                    });
+                }
+
                 return Task.CompletedTask;
             }
         };
@@ -126,12 +151,13 @@ Directory.CreateDirectory(uploadsPath);
 var contentTypeProvider = new FileExtensionContentTypeProvider();
 contentTypeProvider.Mappings[".pdf"] = "application/pdf";
 
-app.UseSwagger();
-app.UseSwaggerUI();
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
 
 app.UseCors("frontend");
-
-app.UseRouting();
 
 app.UseStaticFiles();
 
@@ -163,33 +189,38 @@ app.UseAuthorization();
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
     await db.Database.MigrateAsync();
 
-    var admin = await db.Users.FirstOrDefaultAsync(x =>
-        x.Username == "a.morelp" || x.Email == "a.morelp@aduanas.gob.do");
+    var superAdmin = await db.Users.FirstOrDefaultAsync(x =>
+        x.Username.ToLower() == "a.morelp" || x.Email.ToLower() == "a.morelp@aduanas.gob.do");
 
-    if (admin == null)
+    if (superAdmin is null)
     {
-        admin = new User
+        superAdmin = new User
         {
             Username = "a.morelp",
             Email = "a.morelp@aduanas.gob.do",
             FullName = "Angel Roberto Morel Peña",
-            Role = UserRole.Admin.ToString(),
+            Role = UserRole.SuperAdmin.ToString(),
             AreaId = null,
             PasswordHash = BCrypt.Net.BCrypt.HashPassword("Angel1234")
         };
 
-        db.Users.Add(admin);
+        db.Users.Add(superAdmin);
     }
     else
     {
-        admin.Username = "a.morelp";
-        admin.Email = "a.morelp@aduanas.gob.do";
-        admin.FullName = "Angel Roberto Morel Peña";
-        admin.Role = UserRole.Admin.ToString();
-        admin.AreaId = null;
-        admin.PasswordHash = BCrypt.Net.BCrypt.HashPassword("Angel1234");
+        superAdmin.Username = "a.morelp";
+        superAdmin.Email = "a.morelp@aduanas.gob.do";
+        superAdmin.FullName = "Angel Roberto Morel Peña";
+        superAdmin.Role = UserRole.SuperAdmin.ToString();
+        superAdmin.AreaId = null;
+
+        if (string.IsNullOrWhiteSpace(superAdmin.PasswordHash) || !BCrypt.Net.BCrypt.Verify("Angel1234", superAdmin.PasswordHash))
+        {
+            superAdmin.PasswordHash = BCrypt.Net.BCrypt.HashPassword("Angel1234");
+        }
     }
 
     await db.SaveChangesAsync();

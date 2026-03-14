@@ -1,59 +1,58 @@
-﻿<!-- src/App.vue -->
-<script setup>
-    import { computed } from "vue";
-    import { RouterLink, useRoute, useRouter } from "vue-router";
+﻿<script setup>
+    import { computed } from "vue"
+    import { RouterLink, useRoute, useRouter } from "vue-router"
+    import { useAuthStore } from "./stores/auth"
 
-    const router = useRouter();
-    const route = useRoute();
+    const router = useRouter()
+    const route = useRoute()
+    const auth = useAuthStore()
 
-    const isLogin = computed(() => route.path.startsWith("/login"));
+    const isLogin = computed(() => route.path.startsWith("/login"))
 
     const menu = computed(() => [
         { key: "dashboard", label: "Dashboard", sub: "Vista general", to: "/dashboard", icon: "grid" },
         { key: "my", label: "Mis Solicitudes", to: "/mis-solicitudes", icon: "list" },
         { key: "area", label: "Bandeja del Área", to: "/bandeja", icon: "inbox" },
         { key: "admin", label: "Administración", to: "/admin/catalogos", icon: "gear" },
-    ]);
+    ])
 
     const activeKey = computed(() => {
-        const p = route.path;
+        const p = route.path
 
-        if (p.startsWith("/dashboard") || p.startsWith("/dashboardview")) return "dashboard";
-        if (p.startsWith("/mis-solicitudes") || p.startsWith("/solicitudes")) return "my";
-        if (p.startsWith("/bandeja")) return "area";
-        if (p.startsWith("/admin")) return "admin";
+        if (p.startsWith("/dashboard") || p.startsWith("/dashboardview")) return "dashboard"
+        if (p.startsWith("/mis-solicitudes") || p.startsWith("/solicitudes")) return "my"
+        if (p.startsWith("/bandeja")) return "area"
+        if (p.startsWith("/admin")) return "admin"
 
-        return "dashboard";
-    });
+        return "dashboard"
+    })
 
     function iconPath(name) {
         switch (name) {
             case "grid":
-                return "M4 4h7v7H4V4Zm9 0h7v7h-7V4ZM4 13h7v7H4v-7Zm9 0h7v7h-7v-7Z";
+                return "M4 4h7v7H4V4Zm9 0h7v7h-7V4ZM4 13h7v7H4v-7Zm9 0h7v7h-7v-7Z"
             case "list":
-                return "M6 7h14M6 12h14M6 17h14M4 7h.01M4 12h.01M4 17h.01";
+                return "M6 7h14M6 12h14M6 17h14M4 7h.01M4 12h.01M4 17h.01"
             case "inbox":
-                return "M4 4h16v12H4V4Zm0 12h5l1.5 2h3L15 16h5v4H4v-4Z";
+                return "M4 4h16v12H4V4Zm0 12h5l1.5 2h3L15 16h5v4H4v-4Z"
             case "gear":
-                return "M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7ZM19.4 12a7.4 7.4 0 0 0-.1-1l2-1.6-2-3.4-2.4 1a7.6 7.6 0 0 0-1.7-1l-.4-2.6H9.2L8.8 6a7.6 7.6 0 0 0-1.7 1l-2.4-1-2 3.4 2 1.6a7.4 7.4 0 0 0 0 2l-2 1.6 2 3.4 2.4-1c.5.4 1.1.7 1.7 1l.4 2.6h5.6l.4-2.6c.6-.3 1.2-.6 1.7-1l2.4 1 2-3.4-2-1.6c.1-.3.1-.6.1-1Z";
+                return "M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7ZM19.4 12a7.4 7.4 0 0 0-.1-1l2-1.6-2-3.4-2.4 1a7.6 7.6 0 0 0-1.7-1l-.4-2.6H9.2L8.8 6a7.6 7.6 0 0 0-1.7 1l-2.4-1-2 3.4 2 1.6a7.4 7.4 0 0 0 0 2l-2 1.6 2 3.4 2.4-1c.5.4 1.1.7 1.7 1l.4 2.6h5.6l.4-2.6c.6-.3 1.2-.6 1.7-1l2.4 1 2-3.4-2-1.6c.1-.3.1-.6.1-1Z"
             default:
-                return "";
+                return ""
         }
     }
 
     function logout() {
-        
-        router.push("/login");
+        auth.logout()
+        router.replace("/login")
     }
 </script>
 
 <template>
-    
     <div v-if="isLogin" class="app-login">
         <router-view />
     </div>
 
-    
     <div v-else class="app-shell">
         <div class="dash">
             <div class="layout">
@@ -97,7 +96,6 @@
                     </button>
                 </aside>
 
-                
                 <main class="main">
                     <router-view />
                 </main>
@@ -116,7 +114,6 @@
 </style>
 
 <style scoped>
-   
     .app-login {
         min-height: 100vh;
     }
@@ -125,7 +122,6 @@
         min-height: 100vh;
     }
 
-   
     .dash {
         min-height: 100vh;
         background: radial-gradient(900px 520px at 20% 18%, rgba(116, 92, 255, 0.22), rgba(255, 255, 255, 0) 62%), radial-gradient(860px 520px at 85% 85%, rgba(179, 94, 255, 0.2), rgba(255, 255, 255, 0) 62%), linear-gradient(180deg, #f7f7ff 0%, #ece9ff 55%, #e9e7ff 100%);
@@ -308,7 +304,6 @@
         min-height: 100vh;
     }
 
-    /* Responsive */
     @media (max-width: 860px) {
         .layout {
             grid-template-columns: 1fr;

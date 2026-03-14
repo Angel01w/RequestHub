@@ -1,34 +1,76 @@
-﻿<!-- src/views/LoginView.vue -->
-<script setup>
-	import { computed, ref } from "vue";
-	import { useRouter } from "vue-router";
-	import { useAuthStore } from "../stores/auth";
+﻿<script setup>
+	import { computed, ref } from "vue"
+	import { useRouter } from "vue-router"
+	import { useAuthStore } from "../stores/auth"
 
-	const router = useRouter();
-	const auth = useAuthStore();
+	const router = useRouter()
+	const auth = useAuthStore()
 
 	const roles = [
 		{ key: "Solicitante", label: "Solicitante" },
 		{ key: "Gestor", label: "Gestor" },
-		{ key: "Administrador", label: "Administrador" },
-	];
+		{ key: "Admin", label: "Administrador" },
+		{ key: "SuperAdmin", label: "SuperAdmin" }
+	]
 
-	const role = ref("Solicitante");
-	const username = ref("");
-	const password = ref("");
-	const showPassword = ref(false);
-	const error = ref("");
+	const role = ref("Solicitante")
+	const username = ref("")
+	const password = ref("")
+	const showPassword = ref(false)
+	const error = ref("")
+	const isSubmitting = ref(false)
+
+	const selectedRoleMap = {
+		Solicitante: "Solicitante",
+		Gestor: "Gestor",
+		Admin: "Admin",
+		SuperAdmin: "SuperAdmin"
+	}
 
 	const roleHint = computed(() => {
-		if (role.value === "Solicitante") return "Crea y da seguimiento a tus solicitudes";
-		if (role.value === "Gestor") return "Gestiona solicitudes del área asignada";
-		return "Administra catálogos y supervisa todas las solicitudes";
-	});
+		if (role.value === "Solicitante") return "Crea y da seguimiento a tus solicitudes"
+		if (role.value === "Gestor") return "Gestiona solicitudes del área asignada"
+		if (role.value === "SuperAdmin") return "Administra usuarios, áreas y supervisa todo el sistema"
+		return "Administra catálogos y supervisa las solicitudes del sistema"
+	})
 
 	const submit = async () => {
-		error.value = "";
-		router.push("/dashboardview");
-	};
+		error.value = ""
+
+		const email = username.value.trim()
+		const userPassword = password.value
+
+		if (!email) {
+			error.value = "El correo es requerido"
+			return
+		}
+
+		if (!userPassword.trim()) {
+			error.value = "La contraseña es requerida"
+			return
+		}
+
+		isSubmitting.value = true
+
+		try {
+			await auth.login(email, userPassword)
+
+			const expectedRole = selectedRoleMap[role.value]
+			const actualRole = auth.role
+
+			if (expectedRole !== actualRole) {
+				auth.logout()
+				error.value = "El rol seleccionado no coincide con su cuenta"
+				return
+			}
+
+			router.push("/dashboardview")
+		} catch (e) {
+			error.value = e?.response?.data?.message || e?.message || "No se pudo iniciar sesión"
+		} finally {
+			isSubmitting.value = false
+		}
+	}
 </script>
 
 <template>
@@ -136,7 +178,8 @@
 								   type="email"
 								   inputmode="email"
 								   autocomplete="username"
-								   placeholder="usuario@empresa.com" />
+								   placeholder="usuario@empresa.com"
+								   :disabled="isSubmitting" />
 						</div>
 					</div>
 
@@ -160,12 +203,14 @@
 								   v-model="password"
 								   :type="showPassword ? 'text' : 'password'"
 								   autocomplete="current-password"
-								   placeholder="••••••••" />
+								   placeholder="••••••••"
+								   :disabled="isSubmitting" />
 
 							<button class="eye"
 									type="button"
 									:aria-label="showPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'"
-									@click="showPassword = !showPassword">
+									@click="showPassword = !showPassword"
+									:disabled="isSubmitting">
 								<svg v-if="!showPassword" viewBox="0 0 24 24" aria-hidden="true">
 									<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Z"
 										  fill="none"
@@ -193,8 +238,8 @@
 						</div>
 					</div>
 
-					<button class="submit" type="submit">
-						<span>Iniciar Sesión</span>
+					<button class="submit" type="submit" :disabled="isSubmitting">
+						<span>{{ isSubmitting ? "Ingresando..." : "Iniciar Sesión" }}</span>
 					</button>
 
 					<p v-if="error" class="error" role="alert">{{ error }}</p>
@@ -486,6 +531,14 @@
 
 		.submit:active {
 			transform: translateY(1px);
+		}
+
+		.submit:disabled,
+		.eye:disabled,
+		.control-input:disabled,
+		.role-card:disabled {
+			cursor: not-allowed;
+			opacity: 0.7;
 		}
 
 	.error {
