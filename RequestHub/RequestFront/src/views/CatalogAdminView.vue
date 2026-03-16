@@ -52,9 +52,13 @@
 	const pageTitle = computed(() => "Administración")
 	const pageSubtitle = computed(() => "Gestiona los catálogos y configuraciones del sistema")
 
-	const canManageCatalogs = computed(() => ["Admin", "SuperAdmin"].includes(auth.role || ""))
-	const canManageUsers = computed(() => ["Admin", "SuperAdmin"].includes(auth.role || ""))
+	const normalizedRole = computed(() => String(auth.role || "").trim())
+	const isAdmin = computed(() => normalizedRole.value === "Admin")
+	const isSuperAdmin = computed(() => normalizedRole.value === "SuperAdmin")
+	const canManageCatalogs = computed(() => isAdmin.value || isSuperAdmin.value)
+	const canManageUsers = computed(() => isAdmin.value || isSuperAdmin.value)
 	const isAuthorized = computed(() => canManageCatalogs.value)
+	const canDeleteUsers = computed(() => isSuperAdmin.value)
 
 	const newButtonLabel = computed(() => {
 		if (activeTab.value === "area") return "Nueva Área"
@@ -116,6 +120,9 @@
 
 	async function api(path, { method = "GET", body } = {}) {
 		const token = auth.token || localStorage.getItem("token") || ""
+
+		console.log("TOKEN_RAW", token)
+		console.log("AUTH_HEADER", token ? `Bearer ${token}` : "")
 
 		const headers = {
 			Accept: "application/json"
@@ -633,14 +640,14 @@
 
 		apiErrorUsers.value = ""
 
-		const normalizedRole = userForm.value.role.trim()
-		const areaId = rolesWithoutArea.has(normalizedRole) ? null : normalizeId(userForm.value.areaId)
+		const normalizedSelectedRole = userForm.value.role.trim()
+		const areaId = rolesWithoutArea.has(normalizedSelectedRole) ? null : normalizeId(userForm.value.areaId)
 
 		const payload = {
 			username: userForm.value.email.trim(),
 			fullName: userForm.value.name.trim(),
 			email: userForm.value.email.trim(),
-			role: normalizedRole,
+			role: normalizedSelectedRole,
 			areaId
 		}
 
@@ -755,6 +762,11 @@
 
 		if (!auth.token) {
 			router.replace("/login")
+			return
+		}
+
+		if (!isAuthorized.value) {
+			apiErrorUsers.value = "No autorizado"
 			return
 		}
 
@@ -965,7 +977,7 @@
 									</span>
 									Editar
 								</button>
-								<button class="btn btn--del" type="button" @click="onDeleteUser(u)">
+								<button class="btn btn--del" type="button" @click="onDeleteUser(u)" :disabled="!canDeleteUsers">
 									<span class="btn__icon" aria-hidden="true">
 										<svg viewBox="0 0 24 24"><path :d="iconPath('trash')" /></svg>
 									</span>

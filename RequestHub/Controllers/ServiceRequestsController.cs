@@ -11,7 +11,7 @@ using RequestHub.Infrastructure.Persistence;
 namespace RequestHub.Controllers;
 
 [ApiController]
-[AllowAnonymous]
+[Authorize]
 [Route("api/[controller]")]
 public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAccessor currentUser, IWebHostEnvironment env) : ControllerBase
 {
@@ -24,6 +24,8 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
             .Include(x => x.Priority)
             .Include(x => x.RequestType)
             .AsQueryable();
+
+        query = ApplyVisibilityScope(query);
 
         if (filter.Status.HasValue)
             query = query.Where(x => x.Status == filter.Status.Value);
@@ -66,6 +68,7 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
                 priority = x.Priority != null ? x.Priority.Name : null,
                 requestType = x.RequestType != null ? x.RequestType.Name : null,
                 assignedToUserId = x.AssignedToUserId,
+                createdByUserId = x.CreatedByUserId,
                 attachmentPath = x.AttachmentPath,
                 attachmentName = x.AttachmentName
             })
@@ -91,6 +94,9 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
         if (request is null)
             return NotFound(new { message = "Solicitud no encontrada." });
 
+        if (!CanAccessRequest(request))
+            return Forbid();
+
         return Ok(new
         {
             id = request.Id,
@@ -111,6 +117,7 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
             attachmentPath = request.AttachmentPath,
             attachmentName = request.AttachmentName,
             assignedToUserId = request.AssignedToUserId,
+            createdByUserId = request.CreatedByUserId,
             createdByName = request.CreatedByUser != null ? request.CreatedByUser.FullName : null,
             assignedToName = request.AssignedToUser != null ? request.AssignedToUser.FullName : null,
             comments = request.Comments
@@ -121,7 +128,8 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
                     text = c.Text,
                     createdAtUtc = c.CreatedAtUtc,
                     user = c.User != null ? c.User.FullName : "Sistema",
-                    userName = c.User != null ? c.User.FullName : "Sistema"
+                    userName = c.User != null ? c.User.FullName : "Sistema",
+                    userId = c.UserId
                 }),
             history = request.HistoryEntries
                 .OrderBy(c => c.CreatedAtUtc)
@@ -130,7 +138,8 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
                     id = c.Id,
                     action = c.Action,
                     createdAtUtc = c.CreatedAtUtc,
-                    user = c.User != null ? c.User.FullName : "Sistema"
+                    user = c.User != null ? c.User.FullName : "Sistema",
+                    userId = c.UserId
                 })
         });
     }
@@ -167,9 +176,9 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
         if (priority is null)
             return BadRequest(new { message = "Prioridad inválida." });
 
-        var fallbackUser = await dbContext.Users.OrderBy(x => x.Id).FirstOrDefaultAsync();
-        if (fallbackUser is null)
-            return BadRequest(new { message = "No hay usuarios registrados en la base de datos." });
+        var creator = await dbContext.Users.FirstOrDefaultAsync(x => x.Id == currentUser.UserId);
+        if (creator is null)
+            return Unauthorized(new { message = "Usuario autenticado no válido." });
 
         string? attachmentPath = null;
         string? attachmentName = null;
@@ -200,7 +209,7 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
             Description = dto.Description.Trim(),
             PriorityId = dto.PriorityId,
             CreatedAtUtc = DateTime.UtcNow,
-            CreatedByUserId = fallbackUser.Id,
+            CreatedByUserId = currentUser.UserId,
             Status = TicketStatus.Nueva,
             RejectionReason = null,
             AttachmentPath = attachmentPath,
@@ -216,7 +225,7 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
         dbContext.RequestHistories.Add(new RequestHistory
         {
             ServiceRequestId = request.Id,
-            UserId = fallbackUser.Id,
+            UserId = currentUser.UserId,
             Action = $"Solicitud creada ({request.Number}). Estado: {request.Status}.",
             CreatedAtUtc = DateTime.UtcNow
         });
@@ -240,6 +249,7 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
             area = area.Name,
             priority = priority.Name,
             requestType = type.Name,
+            createdByUserId = request.CreatedByUserId,
             attachmentPath = request.AttachmentPath,
             attachmentName = request.AttachmentName,
             assignedToUserId = request.AssignedToUserId
@@ -259,6 +269,21 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
         if (request is null)
             return NotFound(new { message = "Solicitud no encontrada." });
 
+        if (!CanAccessRequest(request))
+            return Forbid();
+
+        var isSolicitante = currentUser.Role == UserRole.Solicitante;
+        var isAdminOrSuperAdmin = currentUser.Role == UserRole.Admin || currentUser.Role == UserRole.SuperAdmin;
+
+        if (isSolicitante)
+        {
+            if (request.CreatedByUserId != currentUser.UserId)
+                return Forbid();
+
+            if (request.Status != TicketStatus.Nueva)
+                return BadRequest(new { message = "Solo puedes editar solicitudes en estado Nueva." });
+        }
+
         var areaExists = await dbContext.Areas.AnyAsync(x => x.Id == dto.AreaId);
         if (!areaExists)
             return BadRequest(new { message = "Área inválida." });
@@ -272,19 +297,31 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
         if (priority is null)
             return BadRequest(new { message = "Prioridad inválida." });
 
-        if (!Enum.IsDefined(typeof(TicketStatus), dto.StatusId))
-            return BadRequest(new { message = "Estado inválido." });
-
         if (string.IsNullOrWhiteSpace(dto.Subject))
             return BadRequest(new { message = "El asunto es requerido." });
 
         if (string.IsNullOrWhiteSpace(dto.Description))
             return BadRequest(new { message = "La descripción es requerida." });
 
-        var newStatus = (TicketStatus)dto.StatusId;
+        TicketStatus newStatus;
 
-        if (newStatus == TicketStatus.Rechazada && string.IsNullOrWhiteSpace(dto.RejectionReason))
-            return BadRequest(new { message = "Debe especificar motivo de rechazo." });
+        if (isSolicitante)
+        {
+            newStatus = TicketStatus.Nueva;
+        }
+        else
+        {
+            if (!Enum.IsDefined(typeof(TicketStatus), dto.StatusId))
+                return BadRequest(new { message = "Estado inválido." });
+
+            newStatus = (TicketStatus)dto.StatusId;
+
+            if (newStatus == TicketStatus.Cerrada && !isAdminOrSuperAdmin)
+                return BadRequest(new { message = "Solo un administrador puede cerrar solicitudes." });
+
+            if (newStatus == TicketStatus.Rechazada && string.IsNullOrWhiteSpace(dto.RejectionReason))
+                return BadRequest(new { message = "Debe especificar motivo de rechazo." });
+        }
 
         var attachmentPath = request.AttachmentPath;
         var attachmentName = request.AttachmentName;
@@ -323,19 +360,15 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
 
         await dbContext.SaveChangesAsync();
 
-        var fallbackUser = await dbContext.Users.OrderBy(x => x.Id).FirstOrDefaultAsync();
-        if (fallbackUser is not null)
+        dbContext.RequestHistories.Add(new RequestHistory
         {
-            dbContext.RequestHistories.Add(new RequestHistory
-            {
-                ServiceRequestId = request.Id,
-                UserId = fallbackUser.Id,
-                Action = $"Solicitud actualizada. Estado: {request.Status}.",
-                CreatedAtUtc = DateTime.UtcNow
-            });
+            ServiceRequestId = request.Id,
+            UserId = currentUser.UserId,
+            Action = $"Solicitud actualizada. Estado: {request.Status}.",
+            CreatedAtUtc = DateTime.UtcNow
+        });
 
-            await dbContext.SaveChangesAsync();
-        }
+        await dbContext.SaveChangesAsync();
 
         await dbContext.Entry(request).Reference(x => x.Area).LoadAsync();
         await dbContext.Entry(request).Reference(x => x.Priority).LoadAsync();
@@ -358,6 +391,7 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
             area = request.Area?.Name,
             priority = request.Priority?.Name,
             requestType = request.RequestType?.Name,
+            createdByUserId = request.CreatedByUserId,
             attachmentPath = request.AttachmentPath,
             attachmentName = request.AttachmentName,
             assignedToUserId = request.AssignedToUserId,
@@ -376,6 +410,15 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
         if (request is null)
             return NotFound(new { message = "Solicitud no encontrada." });
 
+        if (!CanAccessRequest(request))
+            return Forbid();
+
+        if (currentUser.Role == UserRole.Solicitante)
+        {
+            if (request.CreatedByUserId != currentUser.UserId || request.Status != TicketStatus.Nueva)
+                return BadRequest(new { message = "Solo puedes eliminar tus solicitudes en estado Nueva." });
+        }
+
         if (request.Comments.Count != 0)
             dbContext.RequestComments.RemoveRange(request.Comments);
 
@@ -391,15 +434,17 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
     [HttpPost("{id:int}/take")]
     public async Task<ActionResult> Take(int id)
     {
+        if (currentUser.Role == UserRole.Solicitante)
+            return Forbid();
+
         var request = await dbContext.ServiceRequests.FindAsync(id);
         if (request is null)
-            return NotFound();
+            return NotFound(new { message = "Solicitud no encontrada." });
 
-        var fallbackUser = await dbContext.Users.OrderBy(x => x.Id).FirstOrDefaultAsync();
-        if (fallbackUser is null)
-            return BadRequest("No hay usuarios registrados en la base de datos.");
+        if (!CanAccessRequest(request))
+            return Forbid();
 
-        request.AssignedToUserId = fallbackUser.Id;
+        request.AssignedToUserId = currentUser.UserId;
         request.Status = request.Status == TicketStatus.Nueva ? TicketStatus.EnProceso : request.Status;
 
         await dbContext.SaveChangesAsync();
@@ -407,7 +452,7 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
         dbContext.RequestHistories.Add(new RequestHistory
         {
             ServiceRequestId = request.Id,
-            UserId = fallbackUser.Id,
+            UserId = currentUser.UserId,
             Action = $"Solicitud tomada. Estado: {request.Status}.",
             CreatedAtUtc = DateTime.UtcNow
         });
@@ -420,15 +465,21 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
     [HttpPost("{id:int}/assign")]
     public async Task<ActionResult> Assign(int id, [FromBody] AssignRequestDto dto)
     {
+        if (currentUser.Role != UserRole.Admin && currentUser.Role != UserRole.SuperAdmin)
+            return Forbid();
+
         var request = await dbContext.ServiceRequests.FindAsync(id);
         if (request is null)
-            return NotFound();
+            return NotFound(new { message = "Solicitud no encontrada." });
+
+        if (!CanAccessRequest(request))
+            return Forbid();
 
         if (dto.UserId.HasValue)
         {
             var user = await dbContext.Users.FirstOrDefaultAsync(x => x.Id == dto.UserId.Value);
             if (user is null)
-                return BadRequest("Usuario no válido.");
+                return BadRequest(new { message = "Usuario no válido." });
 
             request.AssignedToUserId = user.Id;
         }
@@ -438,21 +489,51 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
         }
 
         await dbContext.SaveChangesAsync();
+
+        dbContext.RequestHistories.Add(new RequestHistory
+        {
+            ServiceRequestId = request.Id,
+            UserId = currentUser.UserId,
+            Action = request.AssignedToUserId.HasValue ? $"Solicitud asignada al usuario {request.AssignedToUserId}." : "Asignación removida.",
+            CreatedAtUtc = DateTime.UtcNow
+        });
+
+        await dbContext.SaveChangesAsync();
+
         return NoContent();
     }
 
     [HttpPost("{id:int}/status")]
     public async Task<ActionResult> ChangeStatus(int id, [FromBody] ChangeStatusDto dto)
     {
+        if (currentUser.Role == UserRole.Solicitante)
+            return Forbid();
+
         var request = await dbContext.ServiceRequests.FindAsync(id);
         if (request is null)
-            return NotFound();
+            return NotFound(new { message = "Solicitud no encontrada." });
+
+        if (!CanAccessRequest(request))
+            return Forbid();
+
+        if (dto.Status == TicketStatus.Cerrada && currentUser.Role != UserRole.Admin && currentUser.Role != UserRole.SuperAdmin)
+            return BadRequest(new { message = "Solo un administrador puede cerrar solicitudes." });
 
         if (dto.Status == TicketStatus.Rechazada && string.IsNullOrWhiteSpace(dto.RejectionReason))
-            return BadRequest("Debe especificar motivo de rechazo.");
+            return BadRequest(new { message = "Debe especificar motivo de rechazo." });
 
         request.Status = dto.Status;
         request.RejectionReason = dto.Status == TicketStatus.Rechazada ? dto.RejectionReason?.Trim() : null;
+
+        await dbContext.SaveChangesAsync();
+
+        dbContext.RequestHistories.Add(new RequestHistory
+        {
+            ServiceRequestId = request.Id,
+            UserId = currentUser.UserId,
+            Action = $"Estado cambiado a {request.Status}.",
+            CreatedAtUtc = DateTime.UtcNow
+        });
 
         await dbContext.SaveChangesAsync();
 
@@ -469,21 +550,27 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
     [HttpPost("{id:int}/comments")]
     public async Task<ActionResult> AddComment(int id, [FromBody] AddCommentDto dto)
     {
+        if (currentUser.Role == UserRole.Solicitante)
+            return Forbid();
+
         var request = await dbContext.ServiceRequests.FindAsync(id);
         if (request is null)
             return NotFound(new { message = "Solicitud no encontrada." });
 
+        if (!CanAccessRequest(request))
+            return Forbid();
+
         if (string.IsNullOrWhiteSpace(dto.Text))
             return BadRequest(new { message = "El comentario es requerido." });
 
-        var fallbackUser = await dbContext.Users.OrderBy(x => x.Id).FirstOrDefaultAsync();
-        if (fallbackUser is null)
-            return BadRequest(new { message = "No hay usuarios registrados en la base de datos." });
+        var user = await dbContext.Users.FirstOrDefaultAsync(x => x.Id == currentUser.UserId);
+        if (user is null)
+            return Unauthorized(new { message = "Usuario autenticado no válido." });
 
         var comment = new RequestComment
         {
             ServiceRequestId = id,
-            UserId = fallbackUser.Id,
+            UserId = currentUser.UserId,
             Text = dto.Text.Trim(),
             CreatedAtUtc = DateTime.UtcNow
         };
@@ -494,7 +581,7 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
         dbContext.RequestHistories.Add(new RequestHistory
         {
             ServiceRequestId = id,
-            UserId = fallbackUser.Id,
+            UserId = currentUser.UserId,
             Action = "Comentario agregado.",
             CreatedAtUtc = DateTime.UtcNow
         });
@@ -506,20 +593,27 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
             id = comment.Id,
             text = comment.Text,
             createdAtUtc = comment.CreatedAtUtc,
-            user = fallbackUser.FullName,
-            userName = fallbackUser.FullName
+            user = user.FullName,
+            userName = user.FullName,
+            userId = currentUser.UserId
         });
     }
 
     [HttpPut("{id:int}/comments/{commentId:int}")]
     public async Task<ActionResult> UpdateComment(int id, int commentId, [FromBody] AddCommentDto dto)
     {
+        if (currentUser.Role == UserRole.Solicitante)
+            return Forbid();
+
         if (string.IsNullOrWhiteSpace(dto.Text))
             return BadRequest(new { message = "El comentario es requerido." });
 
-        var requestExists = await dbContext.ServiceRequests.AnyAsync(x => x.Id == id);
-        if (!requestExists)
+        var request = await dbContext.ServiceRequests.FirstOrDefaultAsync(x => x.Id == id);
+        if (request is null)
             return NotFound(new { message = "Solicitud no encontrada." });
+
+        if (!CanAccessRequest(request))
+            return Forbid();
 
         var comment = await dbContext.RequestComments
             .Include(x => x.User)
@@ -532,19 +626,15 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
 
         await dbContext.SaveChangesAsync();
 
-        var fallbackUser = await dbContext.Users.OrderBy(x => x.Id).FirstOrDefaultAsync();
-        if (fallbackUser is not null)
+        dbContext.RequestHistories.Add(new RequestHistory
         {
-            dbContext.RequestHistories.Add(new RequestHistory
-            {
-                ServiceRequestId = id,
-                UserId = fallbackUser.Id,
-                Action = "Comentario editado.",
-                CreatedAtUtc = DateTime.UtcNow
-            });
+            ServiceRequestId = id,
+            UserId = currentUser.UserId,
+            Action = "Comentario editado.",
+            CreatedAtUtc = DateTime.UtcNow
+        });
 
-            await dbContext.SaveChangesAsync();
-        }
+        await dbContext.SaveChangesAsync();
 
         return Ok(new
         {
@@ -552,16 +642,23 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
             text = comment.Text,
             createdAtUtc = comment.CreatedAtUtc,
             user = comment.User != null ? comment.User.FullName : "Sistema",
-            userName = comment.User != null ? comment.User.FullName : "Sistema"
+            userName = comment.User != null ? comment.User.FullName : "Sistema",
+            userId = comment.UserId
         });
     }
 
     [HttpDelete("{id:int}/comments/{commentId:int}")]
     public async Task<ActionResult> DeleteComment(int id, int commentId)
     {
-        var requestExists = await dbContext.ServiceRequests.AnyAsync(x => x.Id == id);
-        if (!requestExists)
+        if (currentUser.Role == UserRole.Solicitante)
+            return Forbid();
+
+        var request = await dbContext.ServiceRequests.FirstOrDefaultAsync(x => x.Id == id);
+        if (request is null)
             return NotFound(new { message = "Solicitud no encontrada." });
+
+        if (!CanAccessRequest(request))
+            return Forbid();
 
         var comment = await dbContext.RequestComments
             .FirstOrDefaultAsync(x => x.Id == commentId && x.ServiceRequestId == id);
@@ -572,21 +669,45 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
         dbContext.RequestComments.Remove(comment);
         await dbContext.SaveChangesAsync();
 
-        var fallbackUser = await dbContext.Users.OrderBy(x => x.Id).FirstOrDefaultAsync();
-        if (fallbackUser is not null)
+        dbContext.RequestHistories.Add(new RequestHistory
         {
-            dbContext.RequestHistories.Add(new RequestHistory
-            {
-                ServiceRequestId = id,
-                UserId = fallbackUser.Id,
-                Action = "Comentario eliminado.",
-                CreatedAtUtc = DateTime.UtcNow
-            });
+            ServiceRequestId = id,
+            UserId = currentUser.UserId,
+            Action = "Comentario eliminado.",
+            CreatedAtUtc = DateTime.UtcNow
+        });
 
-            await dbContext.SaveChangesAsync();
-        }
+        await dbContext.SaveChangesAsync();
 
         return NoContent();
+    }
+
+    private IQueryable<ServiceRequest> ApplyVisibilityScope(IQueryable<ServiceRequest> query)
+    {
+        return currentUser.Role switch
+        {
+            UserRole.SuperAdmin => query,
+            UserRole.Admin => currentUser.AreaId.HasValue
+                ? query.Where(x => x.AreaId == currentUser.AreaId.Value)
+                : query,
+            UserRole.Gestor => currentUser.AreaId.HasValue
+                ? query.Where(x => x.AreaId == currentUser.AreaId.Value)
+                : query.Where(x => false),
+            UserRole.Solicitante => query.Where(x => x.CreatedByUserId == currentUser.UserId),
+            _ => query.Where(x => false)
+        };
+    }
+
+    private bool CanAccessRequest(ServiceRequest request)
+    {
+        return currentUser.Role switch
+        {
+            UserRole.SuperAdmin => true,
+            UserRole.Admin => !currentUser.AreaId.HasValue || request.AreaId == currentUser.AreaId.Value,
+            UserRole.Gestor => currentUser.AreaId.HasValue && request.AreaId == currentUser.AreaId.Value,
+            UserRole.Solicitante => request.CreatedByUserId == currentUser.UserId,
+            _ => false
+        };
     }
 
     private static string BuildTemporaryRequestNumber()

@@ -1,4 +1,6 @@
-﻿const API_BASE = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/+$/, "")
+﻿import api from "../../RequestFront/src/services/api.js"
+
+const API_BASE = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/+$/, "")
 
 function toArray(payload) {
 	if (Array.isArray(payload)) return payload
@@ -67,11 +69,7 @@ function normalizeStatusName(raw) {
 
 	if (!value) return "Nueva"
 
-	if (
-		value === "nueva" ||
-		value === "nuevo" ||
-		value === "new"
-	) {
+	if (value === "nueva" || value === "nuevo" || value === "new") {
 		return "Nueva"
 	}
 
@@ -195,36 +193,30 @@ export async function fetchServiceRequests(filter = {}) {
 	if (filter.search) query.set("search", filter.search)
 	if (filter.statusId) query.set("statusId", String(filter.statusId))
 	if (filter.areaId) query.set("areaId", String(filter.areaId))
-	if (filter.dateFrom) query.set("dateFrom", filter.dateFrom)
-	if (filter.dateTo) query.set("dateTo", filter.dateTo)
+	if (filter.dateFrom) query.set("fromUtc", filter.dateFrom)
+	if (filter.dateTo) query.set("toUtc", filter.dateTo)
 
-	const url = `${API_BASE}/api/ServiceRequests${query.toString() ? `?${query.toString()}` : ""}`
+	const url = `/api/ServiceRequests${query.toString() ? `?${query.toString()}` : ""}`
 
-	const response = await fetch(url, {
-		method: "GET",
-		headers: {
-			Accept: "application/json"
-		}
-	})
+	try {
+		const { data } = await api.get(url)
+		return toArray(data).map(normalizeServiceRequest)
+	} catch (error) {
+		const responseData = error?.response?.data
+		const status = error?.response?.status
 
-	if (!response.ok) {
-		let message = "No se pudieron cargar las solicitudes."
-		try {
-			const errorPayload = await response.json()
-			message = firstNonEmpty(
-				errorPayload?.message,
-				errorPayload?.title,
-				errorPayload?.error,
-				message
-			)
-		} catch {
-			message = response.statusText || message
-		}
+		const message = firstNonEmpty(
+			responseData?.message,
+			responseData?.title,
+			responseData?.error,
+			status === 401 ? "No autorizado." : "",
+			status === 403 ? "No autorizado." : "",
+			error?.message,
+			"No se pudieron cargar las solicitudes."
+		)
+
 		throw new Error(message)
 	}
-
-	const payload = await response.json()
-	return toArray(payload).map(normalizeServiceRequest)
 }
 
 export function buildUniqueAreaOptions(requests = []) {

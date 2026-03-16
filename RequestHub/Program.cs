@@ -40,23 +40,26 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ICurrentUserAccessor, CurrentUserAccessor>();
-builder.Services.AddScoped<IJwtTokenGenerator, JwtTokenGenerator>();
 
 builder.Services
-    .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddAuthentication(options =>
+    {
+        options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+        options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+        options.DefaultScheme = JwtBearerDefaults.AuthenticationScheme;
+    })
     .AddJwtBearer(options =>
     {
         options.RequireHttpsMetadata = false;
         options.SaveToken = true;
         options.IncludeErrorDetails = true;
+        options.UseSecurityTokenValidators = true;
         options.MapInboundClaims = false;
 
         options.TokenValidationParameters = new TokenValidationParameters
         {
-            ValidateIssuer = true,
-            ValidIssuer = jwt.Issuer,
-            ValidateAudience = true,
-            ValidAudience = jwt.Audience,
+            ValidateIssuer = false,
+            ValidateAudience = false,
             ValidateLifetime = true,
             ValidateIssuerSigningKey = true,
             IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwt.Key)),
@@ -67,34 +70,34 @@ builder.Services
 
         options.Events = new JwtBearerEvents
         {
-            OnChallenge = context =>
+            OnMessageReceived = context =>
             {
-                if (!context.Response.HasStarted)
-                {
-                    context.HandleResponse();
-                    context.Response.StatusCode = StatusCodes.Status401Unauthorized;
-                    context.Response.ContentType = "application/json";
-                    return context.Response.WriteAsJsonAsync(new
-                    {
-                        message = "No autorizado"
-                    });
-                }
-
+                var header = context.Request.Headers.Authorization.ToString();
+                Console.WriteLine($"JWT HEADER: {header}");
                 return Task.CompletedTask;
             },
-            OnForbidden = context =>
+            OnTokenValidated = context =>
             {
-                if (!context.Response.HasStarted)
-                {
-                    context.Response.StatusCode = StatusCodes.Status403Forbidden;
-                    context.Response.ContentType = "application/json";
-                    return context.Response.WriteAsJsonAsync(new
-                    {
-                        message = "Acceso denegado"
-                    });
-                }
-
+                Console.WriteLine("JWT TOKEN VALIDADO OK");
                 return Task.CompletedTask;
+            },
+            OnAuthenticationFailed = context =>
+            {
+                Console.WriteLine($"JWT AUTH FAILED: {context.Exception.GetType().Name} - {context.Exception.Message}");
+                return Task.CompletedTask;
+            },
+            OnChallenge = async context =>
+            {
+                context.HandleResponse();
+                context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                context.Response.ContentType = "application/json";
+
+                await context.Response.WriteAsJsonAsync(new
+                {
+                    message = "No autorizado",
+                    error = context.Error,
+                    errorDescription = context.ErrorDescription
+                });
             }
         };
     });
@@ -216,11 +219,7 @@ using (var scope = app.Services.CreateScope())
         superAdmin.FullName = "Angel Roberto Morel Peña";
         superAdmin.Role = UserRole.SuperAdmin.ToString();
         superAdmin.AreaId = null;
-
-        if (string.IsNullOrWhiteSpace(superAdmin.PasswordHash) || !BCrypt.Net.BCrypt.Verify("Angel1234", superAdmin.PasswordHash))
-        {
-            superAdmin.PasswordHash = BCrypt.Net.BCrypt.HashPassword("Angel1234");
-        }
+        superAdmin.PasswordHash = BCrypt.Net.BCrypt.HashPassword("Angel1234");
     }
 
     await db.SaveChangesAsync();
