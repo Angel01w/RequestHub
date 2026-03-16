@@ -1,8 +1,10 @@
 ﻿<script setup>
 	import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 	import { useRouter } from "vue-router";
+	import { useAuthStore } from "../stores/auth";
 
 	const router = useRouter();
+	const auth = useAuthStore();
 
 	const API_BASE = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/+$/, "");
 
@@ -13,7 +15,6 @@
 	const isLoadingAreas = ref(false);
 	const isLoadingTypes = ref(false);
 	const deletingId = ref(null);
-	const takingId = ref(null);
 	const modalMode = ref("create");
 	const editingRequestId = ref(null);
 	const activeDropdown = ref(null);
@@ -65,9 +66,22 @@
 		5: "Rechazada"
 	});
 
-	const authHeaders = computed(() => ({
-		Accept: "application/json"
-	}));
+	const currentRole = computed(() => String(auth.role || auth.user?.role || "Solicitante").trim() || "Solicitante");
+	const currentRoleLower = computed(() => currentRole.value.toLowerCase());
+	const currentRoleInitial = computed(() => currentRole.value.charAt(0).toUpperCase() || "S");
+	const roleDescription = computed(() => currentRoleLower.value === "solicitante" ? "Ves solo tus solicitudes" : "Ves solo las solicitudes permitidas por tu rol");
+
+	const authHeaders = computed(() => {
+		const headers = {
+			Accept: "application/json"
+		};
+
+		if (auth.token) {
+			headers.Authorization = `Bearer ${auth.token}`;
+		}
+
+		return headers;
+	});
 
 	const hasRequests = computed(() => filteredRequests.value.length > 0);
 	const isEditing = computed(() => modalMode.value === "edit");
@@ -174,7 +188,6 @@
 
 	const formStatusTone = computed(() => resolveStatusTone(form.value.status));
 	const formCreatedAtPreview = computed(() => formatDateTime(form.value.createdAt || new Date()));
-	const hasExistingAttachment = computed(() => !!String(form.value.attachmentUrl || "").trim());
 	const hasAttachmentSelected = computed(() => form.value.attachment instanceof File);
 	const displayAttachmentName = computed(() => {
 		if (form.value.attachment instanceof File) return form.value.attachment.name;
@@ -195,6 +208,14 @@
 		if (target.includes(".pdf")) return "pdf";
 		return "file";
 	});
+
+	function canEditRequest(item) {
+		return canonicalStatusLabel(item?.status) === "Nueva";
+	}
+
+	function canDeleteRequest(item) {
+		return canonicalStatusLabel(item?.status) === "Nueva";
+	}
 
 	function createDefaultForm() {
 		return {
@@ -245,10 +266,13 @@
 
 	function openNew() {
 		resetForm();
+		form.value.status = "Nueva";
 		isNewOpen.value = true;
 	}
 
 	async function openEdit(item) {
+		if (!canEditRequest(item)) return;
+
 		resetForm();
 		modalMode.value = "edit";
 		editingRequestId.value = item.id;
@@ -264,8 +288,8 @@
 		const resolvedTypeId = item.typeId || resolveTypeIdByName(item.typeName, form.value.areaId);
 		form.value.typeId = resolvedTypeId ? String(resolvedTypeId) : "";
 		form.value.priority = resolvePriorityLabel(item.priority, item.priorityId);
-		form.value.status = resolveStatusLabel(item.status, item.statusId);
-		form.value.rejectionReason = item.rejectionReason || "";
+		form.value.status = "Nueva";
+		form.value.rejectionReason = "";
 		form.value.createdAt = item.createdAt ? toIsoLocalDateTime(item.createdAt) : toIsoLocalDateTime(new Date());
 		form.value.subject = item.subject || "";
 		form.value.description = item.description || "";
@@ -845,20 +869,13 @@
 
 	function buildCreatePayload() {
 		const priorityId = getPriorityId(form.value.priority);
-		const statusId = getStatusId(form.value.status);
 
 		const formData = new FormData();
 		formData.append("AreaId", String(Number(form.value.areaId)));
 		formData.append("RequestTypeId", String(Number(form.value.typeId)));
 		formData.append("PriorityId", String(priorityId));
-		formData.append("StatusId", String(statusId));
 		formData.append("Subject", form.value.subject.trim());
 		formData.append("Description", form.value.description.trim());
-		formData.append("CreatedAt", new Date(form.value.createdAt).toISOString());
-
-		if (canonicalStatusLabel(form.value.status) === "Rechazada") {
-			formData.append("RejectionReason", String(form.value.rejectionReason || "").trim());
-		}
 
 		if (form.value.attachment instanceof File) {
 			formData.append("Attachment", form.value.attachment);
@@ -869,21 +886,15 @@
 
 	function buildUpdatePayload() {
 		const priorityId = getPriorityId(form.value.priority);
-		const statusId = getStatusId(form.value.status);
 
 		const formData = new FormData();
 		formData.append("AreaId", String(Number(form.value.areaId)));
 		formData.append("RequestTypeId", String(Number(form.value.typeId)));
 		formData.append("PriorityId", String(priorityId));
-		formData.append("StatusId", String(statusId));
+		formData.append("StatusId", "1");
 		formData.append("Subject", form.value.subject.trim());
 		formData.append("Description", form.value.description.trim());
-		formData.append("CreatedAt", new Date(form.value.createdAt).toISOString());
 		formData.append("RemoveAttachment", form.value.removeAttachment ? "true" : "false");
-
-		if (canonicalStatusLabel(form.value.status) === "Rechazada") {
-			formData.append("RejectionReason", String(form.value.rejectionReason || "").trim());
-		}
 
 		if (form.value.attachment instanceof File) {
 			formData.append("Attachment", form.value.attachment);
@@ -896,11 +907,8 @@
 		if (!form.value.areaId) return "Debes seleccionar un área.";
 		if (!form.value.typeId) return "Debes seleccionar un tipo de solicitud.";
 		if (!form.value.priority) return "Debes seleccionar una prioridad.";
-		if (!form.value.status) return "Debes seleccionar un estado.";
-		if (!form.value.createdAt) return "Debes indicar la fecha de la solicitud.";
 		if (!form.value.subject.trim()) return "Debes ingresar el asunto.";
 		if (!form.value.description.trim()) return "Debes ingresar la descripción.";
-		if (canonicalStatusLabel(form.value.status) === "Rechazada" && !String(form.value.rejectionReason || "").trim()) return "Debes indicar el motivo del rechazo.";
 		if (form.value.attachment && form.value.attachment.size > 10 * 1024 * 1024) return "El archivo supera el máximo de 10MB.";
 		return "";
 	}
@@ -927,14 +935,13 @@
 				});
 
 				const responseNormalized = responsePayload ? normalizeRequest(responsePayload, 0) : null;
-				const currentStatusLabel = canonicalStatusLabel(form.value.status);
 
 				syncLocalRequestState(editingRequestId.value, {
-					status: currentStatusLabel,
-					statusName: currentStatusLabel,
-					requestStatusName: currentStatusLabel,
-					statusId: getStatusId(currentStatusLabel),
-					rejectionReason: currentStatusLabel === "Rechazada" ? form.value.rejectionReason : "",
+					status: "Nueva",
+					statusName: "Nueva",
+					requestStatusName: "Nueva",
+					statusId: 1,
+					rejectionReason: "",
 					attachmentName: form.value.removeAttachment ? "" : responseNormalized?.attachmentName || displayAttachmentName.value,
 					attachmentPath: form.value.removeAttachment ? "" : responseNormalized?.attachmentPath || responseNormalized?.attachmentUrl || form.value.attachmentUrl,
 					attachmentUrl: form.value.removeAttachment ? "" : responseNormalized?.attachmentUrl || responseNormalized?.attachmentPath || form.value.attachmentUrl,
@@ -963,6 +970,8 @@
 	}
 
 	async function removeRequest(item) {
+		if (!canDeleteRequest(item)) return;
+
 		const confirmed = window.confirm(`¿Seguro que deseas eliminar la solicitud ${item.requestNumber}?`);
 		if (!confirmed) return;
 
@@ -977,20 +986,6 @@
 			window.alert(error?.message || "No se pudo eliminar la solicitud.");
 		} finally {
 			deletingId.value = null;
-		}
-	}
-
-	async function takeRequest(item) {
-		takingId.value = item.id;
-		try {
-			await apiRequest(`${API_BASE}/api/ServiceRequests/${item.id}/take`, {
-				method: "POST"
-			});
-			await loadRequests();
-		} catch (error) {
-			window.alert(error?.message || "No se pudo tomar la solicitud.");
-		} finally {
-			takingId.value = null;
 		}
 	}
 
@@ -1023,8 +1018,6 @@
 				return "M9 12h6M9 16h6M9 8h6M6 4h9l3 3v13H6V4Zm9 0v3h3";
 			case "eye":
 				return "M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6Zm10 3.2A3.2 3.2 0 1 0 12 8.8a3.2 3.2 0 0 0 0 6.4Z";
-			case "take":
-				return "M12 3v18M3 12h18";
 			case "open":
 				return "M14 5.5h5v5M19 5.5l-8.5 8.5M18.5 13.5v5h-13v-13h5";
 			case "download":
@@ -1060,7 +1053,7 @@
 	watch(
 		() => form.value.status,
 		value => {
-			form.value.status = canonicalStatusLabel(value);
+			form.value.status = canonicalStatusLabel(value) || "Nueva";
 			if (canonicalStatusLabel(value) !== "Rechazada") {
 				form.value.rejectionReason = "";
 			}
@@ -1105,10 +1098,10 @@
 					</button>
 
 					<div class="roleCard" aria-label="Rol">
-						<div class="roleAvatar">S</div>
+						<div class="roleAvatar">{{ currentRoleInitial }}</div>
 						<div class="roleTxt">
-							<div class="roleLine"><b>Rol:</b> Solicitante</div>
-							<div class="roleSub">Ves solo tus solicitudes</div>
+							<div class="roleLine"><b>Rol:</b> {{ currentRole }}</div>
+							<div class="roleSub">{{ roleDescription }}</div>
 						</div>
 					</div>
 				</div>
@@ -1341,15 +1334,11 @@
 										<svg viewBox="0 0 24 24"><path :d="iconPath('eye')" /></svg>
 										Ver
 									</button>
-									<button class="iconAction iconAction--take" type="button" :disabled="takingId === item.id" @click="takeRequest(item)">
-										<svg viewBox="0 0 24 24"><path :d="iconPath('take')" /></svg>
-										{{ takingId === item.id ? "Tomando..." : "Tomar" }}
-									</button>
-									<button class="iconAction iconAction--edit" type="button" @click="openEdit(item)">
+									<button v-if="canEditRequest(item)" class="iconAction iconAction--edit" type="button" @click="openEdit(item)">
 										<svg viewBox="0 0 24 24"><path :d="iconPath('edit')" /></svg>
 										Editar
 									</button>
-									<button class="iconAction iconAction--delete" type="button" :disabled="deletingId === item.id" @click="removeRequest(item)">
+									<button v-if="canDeleteRequest(item)" class="iconAction iconAction--delete" type="button" :disabled="deletingId === item.id" @click="removeRequest(item)">
 										<svg viewBox="0 0 24 24"><path :d="iconPath('trash')" /></svg>
 										{{ deletingId === item.id ? "Eliminando..." : "Eliminar" }}
 									</button>
@@ -1574,22 +1563,12 @@
 					<aside class="modalSide">
 						<div class="sideCard">
 							<div class="sideCard__title">Estado de la solicitud</div>
-							<div class="sideCard__sub">Selecciona el flujo actual antes de guardar.</div>
+							<div class="sideCard__sub">En este flujo la solicitud se mantiene en Nueva mientras puedes editarla.</div>
 
 							<div class="statusFormGrid">
-								<button v-for="status in statusOptions"
-										:key="status.id"
-										class="statusFormOption"
-										:class="[ `statusFormOption--${status.tone}`, { 'statusFormOption--active': form.status === status.label } ]"
-										type="button"
-										@click="form.status = status.label">
-									{{ status.label }}
+								<button class="statusFormOption statusFormOption--new statusFormOption--active" type="button">
+									Nueva
 								</button>
-							</div>
-
-							<div v-if="form.status === 'Rechazada'" class="field field--wide field--compact">
-								<label>Motivo del rechazo *</label>
-								<textarea v-model.trim="form.rejectionReason" rows="3" placeholder="Indica el motivo del rechazo..." />
 							</div>
 						</div>
 
@@ -1598,8 +1577,8 @@
 							<div class="sideCard__sub">Se usa para ordenar y filtrar correctamente.</div>
 
 							<div class="field field--wide field--compact">
-								<label>Fecha y hora *</label>
-								<input v-model="form.createdAt" type="datetime-local" />
+								<label>Fecha y hora</label>
+								<input v-model="form.createdAt" type="datetime-local" disabled />
 							</div>
 
 							<div class="sideMeta">
@@ -2282,10 +2261,6 @@
 		color: rgba(60, 110, 220, 0.95);
 	}
 
-	.iconAction--take {
-		color: rgba(35, 130, 100, 0.98);
-	}
-
 	.iconAction--edit {
 		color: rgba(88, 78, 212, 0.95);
 	}
@@ -2660,7 +2635,7 @@
 		border: 1px solid rgba(110, 102, 182, 0.12);
 		font-size: 12px;
 		font-weight: 900;
-		cursor: pointer;
+		cursor: default;
 		text-align: left;
 	}
 

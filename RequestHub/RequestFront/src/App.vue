@@ -9,22 +9,77 @@
 
     const isLogin = computed(() => route.path.startsWith("/login"))
 
-    const menu = computed(() => [
-        { key: "dashboard", label: "Dashboard", sub: "Vista general", to: "/dashboard", icon: "grid" },
-        { key: "my", label: "Mis Solicitudes", to: "/mis-solicitudes", icon: "list" },
-        { key: "area", label: "Bandeja del Área", to: "/bandeja", icon: "inbox" },
-        { key: "admin", label: "Administración", to: "/admin/catalogos", icon: "gear" },
-    ])
+    function normalizeRole(role) {
+        return String(role ?? "").trim().toLowerCase()
+    }
+
+    const currentRole = computed(() => normalizeRole(auth.user?.role || auth.role))
+
+    const isSolicitante = computed(() => currentRole.value === "solicitante")
+    const isGestor = computed(() => currentRole.value === "gestor")
+    const isAdmin = computed(() => currentRole.value === "admin")
+    const isSuperAdmin = computed(() => currentRole.value === "superadmin")
+
+    const canAccessDashboard = computed(() => isGestor.value || isAdmin.value || isSuperAdmin.value)
+    const canAccessAreaQueue = computed(() => isGestor.value || isAdmin.value || isSuperAdmin.value)
+    const canAccessAdmin = computed(() => isAdmin.value || isSuperAdmin.value)
+
+    const menu = computed(() => {
+        if (isSolicitante.value) {
+            return [
+                { key: "my", label: "Mis Solicitudes", to: "/mis-solicitudes", icon: "list" }
+            ]
+        }
+
+        const items = []
+
+        if (canAccessDashboard.value) {
+            items.push({
+                key: "dashboard",
+                label: "Dashboard",
+                sub: "Vista general",
+                to: "/dashboard",
+                icon: "grid"
+            })
+        }
+
+        items.push({
+            key: "my",
+            label: "Mis Solicitudes",
+            to: "/mis-solicitudes",
+            icon: "list"
+        })
+
+        if (canAccessAreaQueue.value) {
+            items.push({
+                key: "area",
+                label: "Bandeja del Área",
+                to: "/bandeja",
+                icon: "inbox"
+            })
+        }
+
+        if (canAccessAdmin.value) {
+            items.push({
+                key: "admin",
+                label: "Administración",
+                to: "/admin/catalogos",
+                icon: "gear"
+            })
+        }
+
+        return items
+    })
 
     const activeKey = computed(() => {
         const p = route.path
 
         if (p.startsWith("/dashboard") || p.startsWith("/dashboardview")) return "dashboard"
-        if (p.startsWith("/mis-solicitudes") || p.startsWith("/solicitudes")) return "my"
+        if (p.startsWith("/mis-solicitudes") || p.startsWith("/solicitudes") || p.startsWith("/requests")) return "my"
         if (p.startsWith("/bandeja")) return "area"
         if (p.startsWith("/admin")) return "admin"
 
-        return "dashboard"
+        return isSolicitante.value ? "my" : "dashboard"
     })
 
     function iconPath(name) {

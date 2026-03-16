@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using RequestHub.Domain.Entities;
 using RequestHub.Domain.Enums;
 using RequestHub.Infrastructure.Persistence;
+using System.Security.Claims;
 
 namespace RequestHub.Controllers;
 
@@ -36,12 +37,46 @@ public class UsersController(AppDbContext dbContext) : ControllerBase
         public string NewPassword { get; set; } = "";
     }
 
+    [HttpGet("debug-claims")]
+    public IActionResult DebugClaims()
+    {
+        var claims = User.Claims
+            .Select(x => new
+            {
+                type = x.Type,
+                value = x.Value
+            })
+            .ToList();
+
+        return Ok(new
+        {
+            isAuthenticated = User.Identity?.IsAuthenticated ?? false,
+            authenticationType = User.Identity?.AuthenticationType ?? "",
+            name = User.Identity?.Name ?? "",
+            currentRole = GetCurrentRole(),
+            currentAreaId = GetCurrentAreaId(),
+            claims
+        });
+    }
+
     [HttpGet]
-    [Authorize(Roles = "Admin,SuperAdmin")]
     public async Task<IActionResult> GetAll()
     {
-        var users = await dbContext.Users
+        var currentRole = GetCurrentRole();
+
+        if (!CanManageUsers(currentRole))
+            return Unauthorized(new { message = "No autorizado" });
+
+        var currentAreaId = GetCurrentAreaId();
+
+        var query = dbContext.Users
             .AsNoTracking()
+            .AsQueryable();
+
+        if (!IsSuperAdmin(currentRole) && currentAreaId.HasValue)
+            query = query.Where(x => x.AreaId == currentAreaId.Value);
+
+        var users = await query
             .OrderBy(x => x.FullName)
             .Select(x => new
             {
@@ -58,12 +93,24 @@ public class UsersController(AppDbContext dbContext) : ControllerBase
     }
 
     [HttpGet("{id:int}")]
-    [Authorize(Roles = "Admin,SuperAdmin")]
     public async Task<IActionResult> GetById(int id)
     {
-        var user = await dbContext.Users
+        var currentRole = GetCurrentRole();
+
+        if (!CanManageUsers(currentRole))
+            return Unauthorized(new { message = "No autorizado" });
+
+        var currentAreaId = GetCurrentAreaId();
+
+        var query = dbContext.Users
             .AsNoTracking()
             .Where(x => x.Id == id)
+            .AsQueryable();
+
+        if (!IsSuperAdmin(currentRole) && currentAreaId.HasValue)
+            query = query.Where(x => x.AreaId == currentAreaId.Value);
+
+        var user = await query
             .Select(x => new
             {
                 x.Id,
@@ -76,20 +123,21 @@ public class UsersController(AppDbContext dbContext) : ControllerBase
             .FirstOrDefaultAsync();
 
         if (user is null)
-        {
-            return NotFound(new
-            {
-                message = "Usuario no encontrado"
-            });
-        }
+            return NotFound(new { message = "Usuario no encontrado" });
 
         return Ok(user);
     }
 
     [HttpPost]
-    [Authorize(Roles = "Admin,SuperAdmin")]
     public async Task<IActionResult> Create([FromBody] CreateUserDto request)
     {
+        var currentRole = GetCurrentRole();
+
+        if (!CanManageUsers(currentRole))
+            return Unauthorized(new { message = "No autorizado" });
+
+        var currentAreaId = GetCurrentAreaId();
+
         var username = (request.Username ?? string.Empty).Trim();
         var email = (request.Email ?? string.Empty).Trim().ToLowerInvariant();
         var password = request.Password ?? string.Empty;
@@ -114,8 +162,11 @@ public class UsersController(AppDbContext dbContext) : ControllerBase
         if (!Enum.TryParse<UserRole>(roleText, true, out _))
             return BadRequest(new { message = "Role inválido" });
 
+        if (!CanAssignRole(currentRole, roleText))
+            return Forbid();
+
         var requiresArea = RoleRequiresArea(roleText);
-        var areaId = requiresArea ? request.AreaId : null;
+        var areaId = ResolveAreaIdForWrite(currentRole, currentAreaId, request.AreaId, requiresArea);
 
         if (requiresArea && (!areaId.HasValue || areaId.Value <= 0))
             return BadRequest(new { message = "Debe seleccionar un área para este rol" });
@@ -175,18 +226,22 @@ public class UsersController(AppDbContext dbContext) : ControllerBase
     }
 
     [HttpPut("{id:int}")]
-    [Authorize(Roles = "Admin,SuperAdmin")]
     public async Task<IActionResult> Update(int id, [FromBody] UpdateUserDto request)
     {
+        var currentRole = GetCurrentRole();
+
+        if (!CanManageUsers(currentRole))
+            return Unauthorized(new { message = "No autorizado" });
+
+        var currentAreaId = GetCurrentAreaId();
+
         var user = await dbContext.Users.FirstOrDefaultAsync(x => x.Id == id);
 
         if (user is null)
-        {
-            return NotFound(new
-            {
-                message = "Usuario no encontrado"
-            });
-        }
+            return NotFound(new { message = "Usuario no encontrado" });
+
+        if (!CanManageTargetUser(currentRole, currentAreaId, user))
+            return NotFound(new { message = "Usuario no encontrado" });
 
         var username = (request.Username ?? string.Empty).Trim();
         var email = (request.Email ?? string.Empty).Trim().ToLowerInvariant();
@@ -208,8 +263,11 @@ public class UsersController(AppDbContext dbContext) : ControllerBase
         if (!Enum.TryParse<UserRole>(roleText, true, out _))
             return BadRequest(new { message = "Role inválido" });
 
+        if (!CanAssignRole(currentRole, roleText))
+            return Forbid();
+
         var requiresArea = RoleRequiresArea(roleText);
-        var areaId = requiresArea ? request.AreaId : null;
+        var areaId = ResolveAreaIdForWrite(currentRole, currentAreaId, request.AreaId, requiresArea);
 
         if (requiresArea && (!areaId.HasValue || areaId.Value <= 0))
             return BadRequest(new { message = "Debe seleccionar un área para este rol" });
@@ -264,18 +322,17 @@ public class UsersController(AppDbContext dbContext) : ControllerBase
     }
 
     [HttpDelete("{id:int}")]
-    [Authorize(Roles = "SuperAdmin")]
     public async Task<IActionResult> Delete(int id)
     {
+        var currentRole = GetCurrentRole();
+
+        if (!IsSuperAdmin(currentRole))
+            return Unauthorized(new { message = "No autorizado" });
+
         var user = await dbContext.Users.FirstOrDefaultAsync(x => x.Id == id);
 
         if (user is null)
-        {
-            return NotFound(new
-            {
-                message = "Usuario no encontrado"
-            });
-        }
+            return NotFound(new { message = "Usuario no encontrado" });
 
         var currentUsername = User.FindFirst("username")?.Value ?? string.Empty;
         var currentEmail = User.FindFirst("email")?.Value ?? string.Empty;
@@ -283,34 +340,32 @@ public class UsersController(AppDbContext dbContext) : ControllerBase
         if ((!string.IsNullOrWhiteSpace(currentUsername) && user.Username.Equals(currentUsername, StringComparison.OrdinalIgnoreCase)) ||
             (!string.IsNullOrWhiteSpace(currentEmail) && user.Email.Equals(currentEmail, StringComparison.OrdinalIgnoreCase)))
         {
-            return BadRequest(new
-            {
-                message = "No puedes eliminar tu propio usuario"
-            });
+            return BadRequest(new { message = "No puedes eliminar tu propio usuario" });
         }
 
         dbContext.Users.Remove(user);
         await dbContext.SaveChangesAsync();
 
-        return Ok(new
-        {
-            message = "Usuario eliminado correctamente"
-        });
+        return Ok(new { message = "Usuario eliminado correctamente" });
     }
 
     [HttpPost("{id:int}/reset-password")]
-    [Authorize(Roles = "Admin,SuperAdmin")]
     public async Task<IActionResult> ResetPassword(int id, [FromBody] ResetPasswordDto request)
     {
+        var currentRole = GetCurrentRole();
+
+        if (!CanManageUsers(currentRole))
+            return Unauthorized(new { message = "No autorizado" });
+
+        var currentAreaId = GetCurrentAreaId();
+
         var user = await dbContext.Users.FirstOrDefaultAsync(x => x.Id == id);
 
         if (user is null)
-        {
-            return NotFound(new
-            {
-                message = "Usuario no encontrado"
-            });
-        }
+            return NotFound(new { message = "Usuario no encontrado" });
+
+        if (!CanManageTargetUser(currentRole, currentAreaId, user))
+            return NotFound(new { message = "Usuario no encontrado" });
 
         var newPassword = request.NewPassword ?? string.Empty;
 
@@ -321,10 +376,81 @@ public class UsersController(AppDbContext dbContext) : ControllerBase
 
         await dbContext.SaveChangesAsync();
 
-        return Ok(new
-        {
-            message = "Contraseña actualizada correctamente"
-        });
+        return Ok(new { message = "Contraseña actualizada correctamente" });
+    }
+
+    private string GetCurrentRole()
+    {
+        return User.FindFirst("role")?.Value
+            ?? User.FindFirst(ClaimTypes.Role)?.Value
+            ?? string.Empty;
+    }
+
+    private int? GetCurrentAreaId()
+    {
+        var rawValue =
+            User.FindFirst("areaId")?.Value ??
+            User.FindFirst("AreaId")?.Value ??
+            User.FindFirst("IdArea")?.Value;
+
+        if (int.TryParse(rawValue, out var areaId) && areaId > 0)
+            return areaId;
+
+        return null;
+    }
+
+    private static bool CanManageUsers(string role)
+    {
+        return IsAdmin(role) || IsSuperAdmin(role);
+    }
+
+    private static bool IsSuperAdmin(string role)
+    {
+        return role.Equals("SuperAdmin", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsAdmin(string role)
+    {
+        return role.Equals("Admin", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool CanAssignRole(string currentRole, string targetRole)
+    {
+        if (IsSuperAdmin(currentRole))
+            return true;
+
+        if (IsAdmin(currentRole) && !targetRole.Equals("SuperAdmin", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        return false;
+    }
+
+    private static bool CanManageTargetUser(string currentRole, int? currentAreaId, User targetUser)
+    {
+        if (IsSuperAdmin(currentRole))
+            return true;
+
+        if (!IsAdmin(currentRole))
+            return false;
+
+        if (!currentAreaId.HasValue)
+            return false;
+
+        if ((targetUser.Role ?? string.Empty).Equals("SuperAdmin", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        return targetUser.AreaId == currentAreaId.Value;
+    }
+
+    private static int? ResolveAreaIdForWrite(string currentRole, int? currentAreaId, int? requestedAreaId, bool requiresArea)
+    {
+        if (IsSuperAdmin(currentRole))
+            return requiresArea ? requestedAreaId : null;
+
+        if (IsAdmin(currentRole))
+            return requiresArea ? currentAreaId : null;
+
+        return null;
     }
 
     private static bool RoleRequiresArea(string role)

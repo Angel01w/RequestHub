@@ -1,5 +1,6 @@
 {
   "devDependencies": {
-    "@tsconfig/node20": "^20.1.9"
+    "@tsconfig/node20": "^20.1.9",
+    "eslint": "^10.0.3"
   }
 }

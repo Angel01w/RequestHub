@@ -1,4 +1,5 @@
-﻿using System.Security.Claims;
+﻿using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
 using RequestHub.Domain.Enums;
 
 namespace RequestHub.Application.Services;
@@ -14,14 +15,32 @@ public class CurrentUserAccessor(IHttpContextAccessor httpContextAccessor) : ICu
 {
     private ClaimsPrincipal User => httpContextAccessor.HttpContext?.User ?? throw new UnauthorizedAccessException();
 
-    public int UserId => int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)
-                               ?? User.FindFirstValue(ClaimTypes.Name)
-                               ?? User.FindFirstValue(ClaimTypes.Sid)
-                               ?? User.FindFirstValue(ClaimTypes.PrimarySid)
-                               ?? User.FindFirstValue("sub")
-                               ?? throw new UnauthorizedAccessException("No user id claim found."));
+    public int UserId
+    {
+        get
+        {
+            var value =
+                User.FindFirstValue("userId") ??
+                User.FindFirstValue(JwtRegisteredClaimNames.Sub) ??
+                User.FindFirstValue(ClaimTypes.NameIdentifier) ??
+                throw new UnauthorizedAccessException("No user id claim found.");
 
-    public UserRole Role => Enum.Parse<UserRole>(User.FindFirstValue(ClaimTypes.Role) ?? throw new UnauthorizedAccessException());
+            return int.Parse(value);
+        }
+    }
+
+    public UserRole Role
+    {
+        get
+        {
+            var value =
+                User.FindFirstValue("role") ??
+                User.FindFirstValue(ClaimTypes.Role) ??
+                throw new UnauthorizedAccessException("No role claim found.");
+
+            return Enum.Parse<UserRole>(value, true);
+        }
+    }
 
     public int? AreaId
     {

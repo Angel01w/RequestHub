@@ -7,6 +7,33 @@ import AreaQueueView from "../views/AreaQueueView.vue"
 import RequestDetailView from "../views/RequestDetailView.vue"
 import CatalogAdminView from "../views/CatalogAdminView.vue"
 
+function normalizeRole(role) {
+	return String(role ?? "").trim().toLowerCase()
+}
+
+function getUserRole(auth) {
+	return normalizeRole(auth.user?.role || auth.role)
+}
+
+function isSolicitante(auth) {
+	return getUserRole(auth) === "solicitante"
+}
+
+function canAccessRoute(auth, to) {
+	const allowedRoles = to.meta?.roles
+
+	if (!Array.isArray(allowedRoles) || allowedRoles.length === 0) {
+		return true
+	}
+
+	const currentRole = getUserRole(auth)
+	return allowedRoles.map(normalizeRole).includes(currentRole)
+}
+
+function getDefaultAuthenticatedRoute(auth) {
+	return isSolicitante(auth) ? "/mis-solicitudes" : "/dashboardview"
+}
+
 const router = createRouter({
 	history: createWebHistory(),
 	routes: [
@@ -24,7 +51,10 @@ const router = createRouter({
 			path: "/dashboardview",
 			name: "dashboard",
 			component: () => import("../views/DashboardView.vue"),
-			meta: { requiresAuth: true }
+			meta: {
+				requiresAuth: true,
+				roles: ["SuperAdmin", "Admin", "Gestor"]
+			}
 		},
 		{
 			path: "/dashboard",
@@ -34,20 +64,29 @@ const router = createRouter({
 			path: "/mis-solicitudes",
 			name: "MyRequests",
 			component: MyRequestsView,
-			meta: { requiresAuth: true }
+			meta: {
+				requiresAuth: true,
+				roles: ["SuperAdmin", "Admin", "Gestor", "Solicitante"]
+			}
 		},
 		{
 			path: "/bandeja",
 			name: "AreaQueue",
 			component: AreaQueueView,
-			meta: { requiresAuth: true }
+			meta: {
+				requiresAuth: true,
+				roles: ["SuperAdmin", "Admin", "Gestor"]
+			}
 		},
 		{
 			path: "/requests/:id",
 			name: "RequestDetail",
 			component: RequestDetailView,
 			props: true,
-			meta: { requiresAuth: true }
+			meta: {
+				requiresAuth: true,
+				roles: ["SuperAdmin", "Admin", "Gestor", "Solicitante"]
+			}
 		},
 		{
 			path: "/solicitudes/:id",
@@ -60,7 +99,10 @@ const router = createRouter({
 			path: "/admin/catalogos",
 			name: "CatalogAdmin",
 			component: CatalogAdminView,
-			meta: { requiresAuth: true }
+			meta: {
+				requiresAuth: true,
+				roles: ["SuperAdmin", "Admin"]
+			}
 		}
 	]
 })
@@ -70,13 +112,17 @@ router.beforeEach((to) => {
 
 	if (to.meta?.public) {
 		if (auth.isAuthenticated && to.path === "/login") {
-			return "/dashboardview"
+			return getDefaultAuthenticatedRoute(auth)
 		}
 		return true
 	}
 
 	if (to.meta?.requiresAuth && !auth.isAuthenticated) {
 		return "/login"
+	}
+
+	if (to.meta?.requiresAuth && !canAccessRoute(auth, to)) {
+		return getDefaultAuthenticatedRoute(auth)
 	}
 
 	return true
