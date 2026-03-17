@@ -24,6 +24,7 @@
 	const submitError = ref("")
 	const activeDropdown = ref(null)
 	const editingRequestId = ref(null)
+	const editingRequestSnapshot = ref(null)
 
 	const filters = ref({
 		status: "active",
@@ -67,6 +68,10 @@
 
 	function normalizeRole(role) {
 		return String(role ?? "").trim().toLowerCase()
+	}
+
+	function normalizeText(value) {
+		return String(value ?? "").trim()
 	}
 
 	function getStoredUser() {
@@ -249,6 +254,7 @@
 		requestTypes.value = []
 		submitError.value = ""
 		editingRequestId.value = null
+		editingRequestSnapshot.value = null
 	}
 
 	function onBack() {
@@ -470,6 +476,25 @@
 			.filter(t => t.id !== "" && t.name !== "")
 	}
 
+	function parseApiError(payload, status) {
+		const errors = payload?.errors
+		if (errors && typeof errors === "object") {
+			const flat = Object.values(errors)
+				.flatMap(x => Array.isArray(x) ? x : [x])
+				.map(x => String(x || "").trim())
+				.filter(Boolean)
+
+			if (flat.length) return flat.join(" ")
+		}
+
+		return (
+			payload?.message ||
+			payload?.title ||
+			(typeof payload === "string" ? payload : "") ||
+			`HTTP ${status}`
+		)
+	}
+
 	async function apiRequest(url, options = {}) {
 		const token = auth.token || localStorage.getItem("rh_token") || localStorage.getItem("token")
 
@@ -503,13 +528,7 @@
 				router.replace("/login")
 			}
 
-			const message =
-				payload?.message ||
-				payload?.title ||
-				(typeof payload === "string" ? payload : "") ||
-				`HTTP ${response.status}`
-
-			throw new Error(message)
+			throw new Error(parseApiError(payload, response.status))
 		}
 
 		return payload
@@ -675,15 +694,16 @@
 	async function openEdit(item) {
 		resetForm()
 		editingRequestId.value = item.id
+		editingRequestSnapshot.value = { ...item }
 
 		form.value.areaId = item.areaId ? String(item.areaId) : ""
 		await loadTypesByArea(form.value.areaId)
 		form.value.typeId = item.typeId ? String(item.typeId) : ""
 		form.value.priority = item.priority || ""
-		form.value.status = item.status || "Nueva"
+		form.value.status = canonicalStatusLabel(item.status || "Nueva")
 		form.value.rejectionReason = item.rejectionReason || ""
-		form.value.subject = item.subject || ""
-		form.value.description = item.description || ""
+		form.value.subject = normalizeText(item.subject)
+		form.value.description = normalizeText(item.description)
 
 		isEditOpen.value = true
 	}
@@ -698,26 +718,51 @@
 		if (!form.value.typeId) return "Debes seleccionar un tipo de solicitud."
 		if (!form.value.priority) return "Debes seleccionar una prioridad."
 		if (!form.value.status) return "Debes seleccionar un estado."
-		if (!form.value.subject.trim()) return "Debes ingresar el asunto."
-		if (!form.value.description.trim()) return "Debes ingresar la descripción."
-		if (canonicalStatusLabel(form.value.status) === "Rechazada" && !String(form.value.rejectionReason || "").trim()) {
+		if (!normalizeText(form.value.subject)) return "Debes ingresar el asunto."
+		if (!normalizeText(form.value.description)) return "Debes ingresar la descripción."
+		if (canonicalStatusLabel(form.value.status) === "Rechazada" && !normalizeText(form.value.rejectionReason)) {
 			return "Debes indicar el motivo del rechazo."
 		}
 		return ""
 	}
 
 	function buildUpdatePayload() {
+		const areaId = Number(form.value.areaId)
+		const requestTypeId = Number(form.value.typeId)
 		const priorityId = getPriorityId(form.value.priority)
-		const statusId = getStatusId(form.value.status)
+		const statusName = canonicalStatusLabel(form.value.status)
+		const statusId = getStatusId(statusName)
+		const rejectionReason = statusName === "Rechazada" ? normalizeText(form.value.rejectionReason) : null
+
+		const subject =
+			normalizeText(form.value.subject) ||
+			normalizeText(editingRequestSnapshot.value?.subject) ||
+			normalizeText(editingRequestSnapshot.value?.raw?.subject) ||
+			normalizeText(editingRequestSnapshot.value?.raw?.Subject)
+
+		const description =
+			normalizeText(form.value.description) ||
+			normalizeText(editingRequestSnapshot.value?.description) ||
+			normalizeText(editingRequestSnapshot.value?.raw?.description) ||
+			normalizeText(editingRequestSnapshot.value?.raw?.Description)
 
 		return {
-			areaId: Number(form.value.areaId),
-			requestTypeId: Number(form.value.typeId),
+			areaId,
+			AreaId: areaId,
+			requestTypeId,
+			RequestTypeId: requestTypeId,
 			priorityId,
+			PriorityId: priorityId,
 			statusId,
-			rejectionReason: canonicalStatusLabel(form.value.status) === "Rechazada" ? String(form.value.rejectionReason || "").trim() : null,
-			subject: form.value.subject.trim(),
-			description: form.value.description.trim()
+			StatusId: statusId,
+			statusName,
+			StatusName: statusName,
+			rejectionReason,
+			RejectionReason: rejectionReason,
+			subject,
+			Subject: subject,
+			description,
+			Description: description
 		}
 	}
 
@@ -795,8 +840,11 @@
 	watch(
 		() => form.value.status,
 		value => {
-			form.value.status = canonicalStatusLabel(value)
-			if (canonicalStatusLabel(value) !== "Rechazada") {
+			const normalized = canonicalStatusLabel(value)
+			if (form.value.status !== normalized) {
+				form.value.status = normalized
+			}
+			if (normalized !== "Rechazada") {
 				form.value.rejectionReason = ""
 			}
 		}
@@ -1027,7 +1075,7 @@
 			</div>
 
 			<div class="tablewrap" role="region" aria-label="Tabla de solicitudes del área">
-				<table class="table" v-if="hasRequests">
+				<table v-if="hasRequests" class="table">
 					<thead>
 						<tr>
 							<th>N°</th>

@@ -65,11 +65,34 @@
 		return auth.token || localStorage.getItem("rh_token") || localStorage.getItem("token") || ""
 	}
 
+	function toStr(v) {
+		return v == null ? "" : String(v)
+	}
+
+	function normalizeId(v) {
+		if (v == null || v === "") return null
+		const n = Number(v)
+		return Number.isFinite(n) ? n : null
+	}
+
 	const pageTitle = computed(() => "Administración")
 	const pageSubtitle = computed(() => "Gestiona los catálogos y configuraciones del sistema")
 
+	const storedUser = computed(() => getStoredUser())
+
 	const normalizedRole = computed(() =>
-		normalizeRole(auth.user?.role || auth.role || getStoredUser()?.role)
+		normalizeRole(auth.user?.role || auth.role || storedUser.value?.role)
+	)
+
+	const currentAreaId = computed(() =>
+		normalizeId(
+			auth.user?.areaId ||
+			auth.user?.AreaId ||
+			storedUser.value?.areaId ||
+			storedUser.value?.AreaId ||
+			storedUser.value?.idArea ||
+			storedUser.value?.IdArea
+		)
 	)
 
 	const isAdmin = computed(() => normalizedRole.value === "admin")
@@ -203,7 +226,10 @@
 	}
 
 	function resetTypeForm() {
-		typeForm.value = { name: "", areaId: "" }
+		typeForm.value = {
+			name: "",
+			areaId: isAdmin.value && currentAreaId.value != null ? currentAreaId.value : ""
+		}
 		typeErrors.value = { name: "", areaId: "" }
 		editingTypeId.value = null
 	}
@@ -251,10 +277,18 @@
 
 	function openEditType(type) {
 		if (!canManageTypes.value) return
+
+		const typeAreaId = normalizeId(type.areaId)
+
+		if (isAdmin.value && currentAreaId.value != null && typeAreaId !== currentAreaId.value) {
+			apiErrorTypes.value = "No autorizado"
+			return
+		}
+
 		editingTypeId.value = normalizeId(type.id)
 		typeForm.value = {
 			name: toStr(type.name),
-			areaId: normalizeId(type.areaId) ?? ""
+			areaId: typeAreaId ?? (isAdmin.value && currentAreaId.value != null ? currentAreaId.value : "")
 		}
 		typeErrors.value = { name: "", areaId: "" }
 		isTypeModalOpen.value = true
@@ -313,6 +347,11 @@
 			ok = false
 		}
 
+		if (isAdmin.value && currentAreaId.value != null && areaId !== currentAreaId.value) {
+			typeErrors.value.areaId = "Solo puedes usar tu área."
+			ok = false
+		}
+
 		return ok
 	}
 
@@ -356,14 +395,6 @@
 		}
 
 		return ok
-	}
-
-	function toStr(v) {
-		return v == null ? "" : String(v)
-	}
-
-	function normalizeId(v) {
-		return v == null || v === "" ? null : Number(v)
 	}
 
 	function mapArea(a) {
@@ -446,6 +477,30 @@
 		users.value = users.value.filter(x => Number(x.id) !== Number(id))
 	}
 
+	const visibleAreas = computed(() => {
+		if (isSuperAdmin.value) return areas.value
+		if (isAdmin.value && currentAreaId.value != null) {
+			return areas.value.filter(a => normalizeId(a.id) === currentAreaId.value)
+		}
+		return []
+	})
+
+	const visibleRequestTypes = computed(() => {
+		if (isSuperAdmin.value) return requestTypes.value
+		if (isAdmin.value && currentAreaId.value != null) {
+			return requestTypes.value.filter(t => normalizeId(t.areaId) === currentAreaId.value)
+		}
+		return []
+	})
+
+	const visibleUsers = computed(() => {
+		if (isSuperAdmin.value) return users.value
+		if (isAdmin.value && currentAreaId.value != null) {
+			return users.value.filter(u => normalizeId(u.areaId) === currentAreaId.value)
+		}
+		return []
+	})
+
 	const areaNameById = computed(() => {
 		const map = new Map(areas.value.map(a => [toStr(a.id), toStr(a.name)]))
 		return id => map.get(toStr(id)) ?? ""
@@ -453,15 +508,17 @@
 
 	const filteredAreas = computed(() => {
 		const q = search.value.trim().toLowerCase()
-		if (!q) return areas.value
-		return areas.value.filter(a => toStr(a?.name).toLowerCase().includes(q))
+		const base = visibleAreas.value
+		if (!q) return base
+		return base.filter(a => toStr(a?.name).toLowerCase().includes(q))
 	})
 
 	const filteredTypes = computed(() => {
 		const q = search.value.trim().toLowerCase()
-		if (!q) return requestTypes.value
+		const base = visibleRequestTypes.value
+		if (!q) return base
 
-		return requestTypes.value.filter(t => {
+		return base.filter(t => {
 			const n = toStr(t?.name).toLowerCase()
 			const a = toStr(areaNameById.value(t?.areaId)).toLowerCase()
 			return n.includes(q) || a.includes(q)
@@ -470,9 +527,10 @@
 
 	const filteredUsers = computed(() => {
 		const q = search.value.trim().toLowerCase()
-		if (!q) return users.value
+		const base = visibleUsers.value
+		if (!q) return base
 
-		return users.value.filter(u => {
+		return base.filter(u => {
 			const full = toStr(u?.fullName).toLowerCase()
 			const usern = toStr(u?.username).toLowerCase()
 			const mail = toStr(u?.email).toLowerCase()
@@ -624,7 +682,9 @@
 
 		const payload = {
 			name: typeForm.value.name.trim(),
-			areaId: normalizeId(typeForm.value.areaId)
+			areaId: isAdmin.value && currentAreaId.value != null
+				? currentAreaId.value
+				: normalizeId(typeForm.value.areaId)
 		}
 
 		try {
@@ -667,8 +727,14 @@
 
 		const name = toStr(type?.name).trim()
 		const id = normalizeId(type?.id)
+		const typeAreaId = normalizeId(type?.areaId)
 
 		if (id == null) return
+
+		if (isAdmin.value && currentAreaId.value != null && typeAreaId !== currentAreaId.value) {
+			apiErrorTypes.value = "No autorizado"
+			return
+		}
 
 		const confirmed = window.confirm(`¿Deseas eliminar el tipo de solicitud "${name}"?`)
 		if (!confirmed) return
@@ -799,7 +865,7 @@
 		}
 	})
 
-	watch(activeTab, async (tab) => {
+	watch(activeTab, async tab => {
 		if (tab === "area" && areas.value.length === 0 && !isLoadingAreas.value) {
 			await loadAreas()
 			return
@@ -1125,9 +1191,11 @@
 					<div class="field">
 						<label>Área</label>
 						<div class="selectWrap">
-							<select v-model="typeForm.areaId" class="nativeSelect" :disabled="areas.length === 0">
-								<option value="" disabled>{{ areas.length === 0 ? "Crea un área primero" : "Selecciona un área" }}</option>
-								<option v-for="a in areas" :key="a.id" :value="a.id">{{ a.name }}</option>
+							<select v-model="typeForm.areaId" class="nativeSelect" :disabled="visibleAreas.length === 0 || isAdmin">
+								<option value="" disabled>
+									{{ visibleAreas.length === 0 ? "No hay áreas disponibles" : "Selecciona un área" }}
+								</option>
+								<option v-for="a in visibleAreas" :key="a.id" :value="a.id">{{ a.name }}</option>
 							</select>
 							<span class="selectChev" aria-hidden="true">
 								<svg viewBox="0 0 24 24"><path :d="iconPath('chev')" /></svg>

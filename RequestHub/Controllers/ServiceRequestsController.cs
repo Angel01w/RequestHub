@@ -327,8 +327,7 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
     }
 
     [HttpPut("{id:int}")]
-    [RequestSizeLimit(10_000_000)]
-    public async Task<ActionResult> Update(int id, [FromForm] UpdateServiceRequestDto dto)
+    public async Task<ActionResult> Update(int id, [FromBody] UpdateServiceRequestDto dto)
     {
         var request = await dbContext.ServiceRequests
             .Include(x => x.Area)
@@ -339,23 +338,31 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
         if (request is null)
             return NotFound(new { message = "Solicitud no encontrada." });
 
-        if (!CanEditRequest(request))
+        if (!CanAccessRequest(request))
             return Forbid();
 
         var isSolicitante = currentUser.Role == UserRole.Solicitante;
+        var isAdmin = currentUser.Role == UserRole.Admin;
+        var isGestor = currentUser.Role == UserRole.Gestor;
         var isSuperAdmin = currentUser.Role == UserRole.SuperAdmin;
 
-        if (!isSolicitante && !isSuperAdmin)
+        if (!isSolicitante && !isAdmin && !isGestor && !isSuperAdmin)
             return Forbid();
 
-        if (isSolicitante)
-        {
-            if (request.CreatedByUserId != currentUser.UserId)
-                return Forbid();
+        if (dto.AreaId <= 0)
+            return BadRequest(new { message = "Área inválida." });
 
-            if (request.Status != TicketStatus.Nueva)
-                return BadRequest(new { message = "Solo puedes editar solicitudes en estado Nueva." });
-        }
+        if (dto.RequestTypeId <= 0)
+            return BadRequest(new { message = "Tipo de solicitud inválido." });
+
+        if (dto.PriorityId <= 0)
+            return BadRequest(new { message = "Prioridad inválida." });
+
+        if (string.IsNullOrWhiteSpace(dto.Subject))
+            return BadRequest(new { message = "El asunto es requerido." });
+
+        if (string.IsNullOrWhiteSpace(dto.Description))
+            return BadRequest(new { message = "La descripción es requerida." });
 
         var areaExists = await dbContext.Areas.AnyAsync(x => x.Id == dto.AreaId);
         if (!areaExists)
@@ -370,56 +377,59 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
         if (priority is null)
             return BadRequest(new { message = "Prioridad inválida." });
 
-        if (string.IsNullOrWhiteSpace(dto.Subject))
-            return BadRequest(new { message = "El asunto es requerido." });
-
-        if (string.IsNullOrWhiteSpace(dto.Description))
-            return BadRequest(new { message = "La descripción es requerida." });
-
-        var attachmentPath = request.AttachmentPath;
-        var attachmentName = request.AttachmentName;
-
-        if (dto.RemoveAttachment)
-        {
-            DeleteAttachmentIfExists(request.AttachmentPath);
-            attachmentPath = null;
-            attachmentName = null;
-        }
-        else if (dto.Attachment is not null && dto.Attachment.Length > 0)
-        {
-            DeleteAttachmentIfExists(request.AttachmentPath);
-            var uploaded = await SaveAttachmentAsync(dto.Attachment);
-            attachmentPath = uploaded.Path;
-            attachmentName = uploaded.Name;
-        }
-
-        request.AreaId = dto.AreaId;
-        request.RequestTypeId = dto.RequestTypeId;
-        request.Subject = dto.Subject.Trim();
-        request.Description = dto.Description.Trim();
-        request.PriorityId = dto.PriorityId;
-        request.AttachmentPath = attachmentPath;
-        request.AttachmentName = attachmentName;
-
         if (isSolicitante)
         {
+            if (request.CreatedByUserId != currentUser.UserId)
+                return Forbid();
+
+            if (request.Status != TicketStatus.Nueva)
+                return BadRequest(new { message = "Solo puedes editar solicitudes en estado Nueva." });
+
+            request.AreaId = dto.AreaId;
+            request.RequestTypeId = dto.RequestTypeId;
+            request.Subject = dto.Subject.Trim();
+            request.Description = dto.Description.Trim();
+            request.PriorityId = dto.PriorityId;
             request.Status = TicketStatus.Nueva;
             request.RejectionReason = null;
         }
-        else if (isSuperAdmin)
+        else
         {
+            request.AreaId = dto.AreaId;
+            request.RequestTypeId = dto.RequestTypeId;
+            request.Subject = dto.Subject.Trim();
+            request.Description = dto.Description.Trim();
+            request.PriorityId = dto.PriorityId;
+
             if (Enum.IsDefined(typeof(TicketStatus), dto.StatusId))
             {
                 var newStatus = (TicketStatus)dto.StatusId;
 
-                if (IsCloseStatus(newStatus))
-                    return BadRequest(new { message = "Solo un administrador puede cerrar solicitudes." });
+                if (isGestor)
+                {
+                    if (IsRejectedStatus(newStatus))
+                        return BadRequest(new { message = "Solo Admin o SuperAdmin pueden rechazar solicitudes." });
 
-                if (IsRejectedStatus(newStatus) && string.IsNullOrWhiteSpace(dto.RejectionReason))
-                    return BadRequest(new { message = "Debe especificar motivo de rechazo." });
+                    if (IsCloseStatus(newStatus))
+                        return BadRequest(new { message = "Solo un administrador puede cerrar solicitudes." });
 
-                request.Status = newStatus;
-                request.RejectionReason = IsRejectedStatus(newStatus) ? dto.RejectionReason?.Trim() : null;
+                    request.Status = newStatus;
+                    request.RejectionReason = null;
+                }
+                else if (isAdmin || isSuperAdmin)
+                {
+                    if (IsCloseStatus(newStatus))
+                    {
+                        if (!CanCloseRequest(request))
+                            return BadRequest(new { message = "Solo se puede cerrar una solicitud cuando está resuelta." });
+                    }
+
+                    if (IsRejectedStatus(newStatus) && string.IsNullOrWhiteSpace(dto.RejectionReason))
+                        return BadRequest(new { message = "Debe especificar motivo de rechazo." });
+
+                    request.Status = newStatus;
+                    request.RejectionReason = IsRejectedStatus(newStatus) ? dto.RejectionReason?.Trim() : null;
+                }
             }
         }
 
@@ -588,15 +598,18 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
 
         if (IsCloseStatus(dto.Status))
         {
-            if (currentUser.Role != UserRole.Admin)
-                return BadRequest(new { message = "Solo un administrador puede cerrar solicitudes." });
-
-            if (!IsCompletedForClose(request.Status))
-                return BadRequest(new { message = "Solo se puede cerrar una solicitud cuando está completa." });
+            if (!CanCloseRequest(request))
+                return BadRequest(new { message = "Solo se puede cerrar una solicitud cuando está resuelta." });
         }
 
-        if (IsRejectedStatus(dto.Status) && string.IsNullOrWhiteSpace(dto.RejectionReason))
-            return BadRequest(new { message = "Debe especificar motivo de rechazo." });
+        if (IsRejectedStatus(dto.Status))
+        {
+            if (currentUser.Role != UserRole.Admin && currentUser.Role != UserRole.SuperAdmin)
+                return BadRequest(new { message = "Solo Admin o SuperAdmin pueden rechazar solicitudes." });
+
+            if (string.IsNullOrWhiteSpace(dto.RejectionReason))
+                return BadRequest(new { message = "Debe especificar motivo de rechazo." });
+        }
 
         request.Status = dto.Status;
         request.RejectionReason = IsRejectedStatus(dto.Status) ? dto.RejectionReason?.Trim() : null;
@@ -608,6 +621,47 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
             ServiceRequestId = request.Id,
             UserId = currentUser.UserId,
             Action = $"Estado cambiado a {request.Status}.",
+            CreatedAtUtc = DateTime.UtcNow
+        });
+
+        await dbContext.SaveChangesAsync();
+
+        return Ok(new
+        {
+            id = request.Id,
+            status = request.Status.ToString(),
+            statusId = (int)request.Status,
+            statusName = request.Status.ToString(),
+            rejectionReason = request.RejectionReason
+        });
+    }
+
+    [HttpPost("{id:int}/close")]
+    public async Task<ActionResult> CloseRequest(int id)
+    {
+        if (currentUser.Role != UserRole.Admin && currentUser.Role != UserRole.SuperAdmin)
+            return BadRequest(new { message = "Solo Admin o SuperAdmin pueden cerrar solicitudes." });
+
+        var request = await dbContext.ServiceRequests.FindAsync(id);
+        if (request is null)
+            return NotFound(new { message = "Solicitud no encontrada." });
+
+        if (!CanAccessRequest(request))
+            return Forbid();
+
+        if (!IsCompletedForClose(request.Status))
+            return BadRequest(new { message = "Solo se puede cerrar una solicitud cuando está resuelta." });
+
+        request.Status = TicketStatus.Cerrada;
+        request.RejectionReason = null;
+
+        await dbContext.SaveChangesAsync();
+
+        dbContext.RequestHistories.Add(new RequestHistory
+        {
+            ServiceRequestId = request.Id,
+            UserId = currentUser.UserId,
+            Action = "Solicitud cerrada.",
             CreatedAtUtc = DateTime.UtcNow
         });
 
@@ -800,6 +854,8 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
         return currentUser.Role switch
         {
             UserRole.SuperAdmin => true,
+            UserRole.Admin => CanAccessRequest(request),
+            UserRole.Gestor => CanAccessRequest(request),
             UserRole.Solicitante => request.CreatedByUserId == currentUser.UserId && IsNewStatus(request.Status),
             _ => false
         };
@@ -851,7 +907,7 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
 
     private bool CanCloseRequest(ServiceRequest request)
     {
-        return currentUser.Role == UserRole.Admin
+        return (currentUser.Role == UserRole.Admin || currentUser.Role == UserRole.SuperAdmin)
             && CanAccessRequest(request)
             && IsCompletedForClose(request.Status);
     }
@@ -890,7 +946,9 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
         var name = status.ToString();
         return string.Equals(name, "Completada", StringComparison.OrdinalIgnoreCase)
             || string.Equals(name, "Completa", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(name, "Completed", StringComparison.OrdinalIgnoreCase);
+            || string.Equals(name, "Completed", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(name, "Resuelta", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(name, "Resolved", StringComparison.OrdinalIgnoreCase);
     }
 
     private async Task<(string? Path, string? Name)> SaveAttachmentAsync(IFormFile? attachment)

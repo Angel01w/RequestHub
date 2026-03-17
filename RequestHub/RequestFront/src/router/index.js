@@ -88,7 +88,7 @@ const router = createRouter({
 			component: MyRequestsView,
 			meta: {
 				requiresAuth: true,
-				roles: ["solicitante"]
+				roles: ["solicitante", "superadmin"]
 			}
 		},
 		{
