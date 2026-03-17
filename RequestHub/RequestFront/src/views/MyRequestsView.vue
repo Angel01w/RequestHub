@@ -1,8 +1,9 @@
 ﻿<script setup>
 	import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
-	import { useRouter } from "vue-router";
+	import { useRoute, useRouter } from "vue-router";
 	import { useAuthStore } from "../stores/auth";
 
+	const route = useRoute();
 	const router = useRouter();
 	const auth = useAuthStore();
 
@@ -264,14 +265,24 @@
 		activeDropdown.value = null;
 	}
 
+	function clearEditQuery() {
+		if (!route.query.editId && !route.query.mode && !route.query.t) return;
+		const nextQuery = { ...route.query };
+		delete nextQuery.editId;
+		delete nextQuery.mode;
+		delete nextQuery.t;
+		router.replace({ path: route.path, query: nextQuery });
+	}
+
 	function openNew() {
+		clearEditQuery();
 		resetForm();
 		form.value.status = "Nueva";
 		isNewOpen.value = true;
 	}
 
 	async function openEdit(item) {
-		if (!canEditRequest(item)) return;
+		if (!item || !item.id || !canEditRequest(item)) return;
 
 		resetForm();
 		modalMode.value = "edit";
@@ -302,6 +313,20 @@
 		isNewOpen.value = true;
 	}
 
+	async function openEditFromQuery() {
+		const editId = String(route.query.editId || "").trim();
+		if (!editId) return;
+
+		if (!requests.value.length) {
+			await loadRequests();
+		}
+
+		const target = requests.value.find(x => String(x.id) === editId);
+		if (!target) return;
+
+		await openEdit(target);
+	}
+
 	function openDetail(item) {
 		router.push({
 			name: "RequestDetail",
@@ -313,6 +338,7 @@
 		isNewOpen.value = false;
 		isDragging.value = false;
 		resetForm();
+		clearEditQuery();
 	}
 
 	function onBack() {
@@ -416,8 +442,9 @@
 		}
 
 		switch (datePreset) {
-			case "today":
+			case "today": {
 				return { start: todayStart, end: todayEnd };
+			}
 			case "7d": {
 				const start = new Date(todayStart);
 				start.setDate(start.getDate() - 6);
@@ -1060,12 +1087,21 @@
 		}
 	);
 
+	watch(
+		() => route.query.editId,
+		async newEditId => {
+			if (!newEditId) return;
+			await openEditFromQuery();
+		}
+	);
+
 	onMounted(async () => {
 		document.addEventListener("click", onGlobalClick);
 		document.addEventListener("keydown", onEsc);
 		resetForm();
 		await loadAreas();
 		await loadRequests();
+		await openEditFromQuery();
 	});
 
 	onBeforeUnmount(() => {

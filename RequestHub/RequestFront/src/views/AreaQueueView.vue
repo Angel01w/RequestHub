@@ -1,8 +1,10 @@
 ﻿<script setup>
-	import { computed, onMounted, ref, watch } from "vue"
+	import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue"
 	import { useRouter } from "vue-router"
+	import { useAuthStore } from "../stores/auth"
 
 	const router = useRouter()
+	const auth = useAuthStore()
 
 	const API_BASE = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/+$/, "")
 
@@ -63,30 +65,50 @@
 		{ value: "custom", label: "Rango personalizado" }
 	])
 
+	function normalizeRole(role) {
+		return String(role ?? "").trim().toLowerCase()
+	}
+
+	function getStoredUser() {
+		try {
+			return JSON.parse(localStorage.getItem("rh_user") || localStorage.getItem("user") || "null")
+		} catch {
+			return null
+		}
+	}
+
+	const currentRole = computed(() =>
+		normalizeRole(auth.user?.role || auth.role || getStoredUser()?.role)
+	)
+
+	const canAccessAreaQueue = computed(() =>
+		currentRole.value === "admin" || currentRole.value === "gestor"
+	)
+
 	const userCard = computed(() => {
 		try {
-			const raw = localStorage.getItem("sm_user") || localStorage.getItem("user") || localStorage.getItem("rh_user")
-			if (!raw) {
+			const parsed = getStoredUser()
+
+			if (!parsed) {
 				return {
-					initial: "J",
-					name: "Gestor",
-					role: "Gestor",
+					initial: "U",
+					name: "Usuario",
+					role: "Usuario",
 					area: "Bandeja del Área"
 				}
 			}
 
-			const parsed = JSON.parse(raw)
 			const name =
 				parsed.fullName ||
 				parsed.name ||
 				parsed.username ||
 				parsed.userName ||
-				"Gestor"
+				"Usuario"
 
 			const role =
 				parsed.roleName ||
 				parsed.role ||
-				"Gestor"
+				"Usuario"
 
 			const area =
 				parsed.areaName ||
@@ -94,16 +116,16 @@
 				"Bandeja del Área"
 
 			return {
-				initial: String(name).trim().charAt(0).toUpperCase() || "J",
+				initial: String(name).trim().charAt(0).toUpperCase() || "U",
 				name,
 				role,
 				area
 			}
 		} catch {
 			return {
-				initial: "J",
-				name: "Gestor",
-				role: "Gestor",
+				initial: "U",
+				name: "Usuario",
+				role: "Usuario",
 				area: "Bandeja del Área"
 			}
 		}
@@ -145,15 +167,6 @@
 		const found = dateOptions.find(x => x.value === filters.value.datePreset)
 		return found?.label || "Última semana"
 	})
-
-	const hasRequests = computed(() => filteredRequests.value.length > 0)
-
-	const summary = computed(() => ({
-		newCount: requests.value.filter(x => x.statusKey === "new").length,
-		progressCount: requests.value.filter(x => x.statusKey === "progress").length,
-		resolvedCount: requests.value.filter(x => x.statusKey === "done").length,
-		rejectedCount: requests.value.filter(x => x.statusKey === "rejected").length
-	}))
 
 	const filteredRequests = computed(() => {
 		const term = search.value.trim().toLowerCase()
@@ -209,6 +222,15 @@
 			return matchesSearch && matchesStatus && matchesAssignment && matchesPriority && matchesDate
 		})
 	})
+
+	const hasRequests = computed(() => filteredRequests.value.length > 0)
+
+	const summary = computed(() => ({
+		newCount: requests.value.filter(x => x.statusKey === "new").length,
+		progressCount: requests.value.filter(x => x.statusKey === "progress").length,
+		resolvedCount: requests.value.filter(x => x.statusKey === "done").length,
+		rejectedCount: requests.value.filter(x => x.statusKey === "rejected").length
+	}))
 
 	function createDefaultForm() {
 		return {
@@ -395,9 +417,9 @@
 			subject: firstNonEmpty(item.subject, item.Subject, ""),
 			description: firstNonEmpty(item.description, item.Description, ""),
 			areaId: firstNonEmpty(item.areaId, item.AreaId, item.area?.id, ""),
-			areaName: firstNonEmpty(item.area, item.areaName, item.Area, item.area?.name, ""),
+			areaName: firstNonEmpty(item.areaName, item.area, item.Area, item.area?.name, ""),
 			typeId: firstNonEmpty(item.requestTypeId, item.typeId, item.RequestTypeId, ""),
-			typeName: firstNonEmpty(item.requestType, item.typeName, item.RequestType, item.requestType?.name, ""),
+			typeName: firstNonEmpty(item.requestTypeName, item.requestType, item.typeName, item.RequestType, item.requestType?.name, ""),
 			priorityId,
 			priority: resolvePriorityLabel(firstNonEmpty(item.priority, item.priorityName, item.Priority), priorityId),
 			statusId: statusId || getStatusId(status),
@@ -449,12 +471,20 @@
 	}
 
 	async function apiRequest(url, options = {}) {
+		const token = auth.token || localStorage.getItem("rh_token") || localStorage.getItem("token")
+
+		const headers = {
+			Accept: "application/json",
+			...(options.headers || {})
+		}
+
+		if (token) {
+			headers.Authorization = `Bearer ${token}`
+		}
+
 		const response = await fetch(url, {
 			...options,
-			headers: {
-				Accept: "application/json",
-				...(options.headers || {})
-			}
+			headers
 		})
 
 		const contentType = response.headers.get("content-type") || ""
@@ -468,11 +498,17 @@
 		}
 
 		if (!response.ok) {
+			if (response.status === 401) {
+				auth.logout()
+				router.replace("/login")
+			}
+
 			const message =
 				payload?.message ||
 				payload?.title ||
 				(typeof payload === "string" ? payload : "") ||
 				`HTTP ${response.status}`
+
 			throw new Error(message)
 		}
 
@@ -778,8 +814,27 @@
 	)
 
 	onMounted(async () => {
+		if (!canAccessAreaQueue.value) {
+			if (currentRole.value === "superadmin") {
+				router.replace("/dashboardview")
+				return
+			}
+
+			if (currentRole.value === "solicitante") {
+				router.replace("/mis-solicitudes")
+				return
+			}
+
+			router.replace("/login")
+			return
+		}
+
 		document.addEventListener("click", onGlobalClick)
 		await Promise.all([loadAreas(), loadAllRequestTypes(), loadRequests()])
+	})
+
+	onBeforeUnmount(() => {
+		document.removeEventListener("click", onGlobalClick)
 	})
 </script>
 
@@ -1365,7 +1420,6 @@
 		.filters > :nth-child(2) {
 			margin-left: 20px;
 		}
-
 
 	.filterDropdown {
 		position: relative;

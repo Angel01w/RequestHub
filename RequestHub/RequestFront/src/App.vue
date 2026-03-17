@@ -7,79 +7,110 @@
     const route = useRoute()
     const auth = useAuthStore()
 
-    const isLogin = computed(() => route.path.startsWith("/login"))
-
     function normalizeRole(role) {
         return String(role ?? "").trim().toLowerCase()
     }
 
-    const currentRole = computed(() => normalizeRole(auth.user?.role || auth.role))
+    function getStoredUser() {
+        try {
+            return JSON.parse(localStorage.getItem("rh_user") || localStorage.getItem("user") || "null")
+        } catch {
+            return null
+        }
+    }
+
+    const isLogin = computed(() => route.path.startsWith("/login"))
+
+    const currentRole = computed(() =>
+        normalizeRole(auth.user?.role || auth.role || getStoredUser()?.role)
+    )
 
     const isSolicitante = computed(() => currentRole.value === "solicitante")
     const isGestor = computed(() => currentRole.value === "gestor")
     const isAdmin = computed(() => currentRole.value === "admin")
     const isSuperAdmin = computed(() => currentRole.value === "superadmin")
 
-    const canAccessDashboard = computed(() => isGestor.value || isAdmin.value || isSuperAdmin.value)
-    const canAccessAreaQueue = computed(() => isGestor.value || isAdmin.value || isSuperAdmin.value)
-    const canAccessAdmin = computed(() => isAdmin.value || isSuperAdmin.value)
-
     const menu = computed(() => {
-        if (isSolicitante.value) {
+        if (isSuperAdmin.value) {
             return [
-                { key: "my", label: "Mis Solicitudes", to: "/mis-solicitudes", icon: "list" }
+                {
+                    key: "dashboard",
+                    label: "Dashboard",
+                    sub: "Vista general",
+                    to: "/dashboardview",
+                    icon: "grid"
+                },
+                {
+                    key: "admin",
+                    label: "Administración",
+                    to: "/admin/catalogos",
+                    icon: "gear"
+                }
             ]
         }
 
-        const items = []
-
-        if (canAccessDashboard.value) {
-            items.push({
-                key: "dashboard",
-                label: "Dashboard",
-                sub: "Vista general",
-                to: "/dashboard",
-                icon: "grid"
-            })
+        if (isAdmin.value) {
+            return [
+                {
+                    key: "area",
+                    label: "Bandeja del Área",
+                    to: "/bandeja",
+                    icon: "inbox"
+                },
+                {
+                    key: "admin",
+                    label: "Administración",
+                    to: "/admin/catalogos",
+                    icon: "gear"
+                }
+            ]
         }
 
-        items.push({
-            key: "my",
-            label: "Mis Solicitudes",
-            to: "/mis-solicitudes",
-            icon: "list"
-        })
-
-        if (canAccessAreaQueue.value) {
-            items.push({
-                key: "area",
-                label: "Bandeja del Área",
-                to: "/bandeja",
-                icon: "inbox"
-            })
+        if (isGestor.value) {
+            return [
+                {
+                    key: "area",
+                    label: "Bandeja del Área",
+                    to: "/bandeja",
+                    icon: "inbox"
+                }
+            ]
         }
 
-        if (canAccessAdmin.value) {
-            items.push({
-                key: "admin",
-                label: "Administración",
-                to: "/admin/catalogos",
-                icon: "gear"
-            })
+        if (isSolicitante.value) {
+            return [
+                {
+                    key: "my",
+                    label: "Mis Solicitudes",
+                    to: "/mis-solicitudes",
+                    icon: "list"
+                }
+            ]
         }
 
-        return items
+        return []
     })
 
     const activeKey = computed(() => {
         const p = route.path
 
         if (p.startsWith("/dashboard") || p.startsWith("/dashboardview")) return "dashboard"
-        if (p.startsWith("/mis-solicitudes") || p.startsWith("/solicitudes") || p.startsWith("/requests")) return "my"
         if (p.startsWith("/bandeja")) return "area"
         if (p.startsWith("/admin")) return "admin"
 
-        return isSolicitante.value ? "my" : "dashboard"
+        if (p.startsWith("/mis-solicitudes")) return "my"
+
+        if (p.startsWith("/requests") || p.startsWith("/solicitudes")) {
+            if (isSuperAdmin.value) return "dashboard"
+            if (isAdmin.value || isGestor.value) return "area"
+            if (isSolicitante.value) return "my"
+        }
+
+        if (isSuperAdmin.value) return "dashboard"
+        if (isAdmin.value || isGestor.value) return "area"
+        if (isSolicitante.value) return "my"
+
+        return ""
     })
 
     function iconPath(name) {
@@ -99,6 +130,10 @@
 
     function logout() {
         auth.logout()
+        localStorage.removeItem("rh_token")
+        localStorage.removeItem("rh_user")
+        localStorage.removeItem("token")
+        localStorage.removeItem("user")
         router.replace("/login")
     }
 </script>

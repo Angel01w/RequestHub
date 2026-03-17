@@ -13,6 +13,7 @@
 	const isLoading = ref(false)
 	const loadError = ref("")
 	const requests = ref([])
+	const deletingId = ref(null)
 
 	const filters = ref({
 		search: "",
@@ -20,6 +21,13 @@
 		area: "",
 		date: ""
 	})
+
+	const API_BASE = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/+$/, "")
+	const MY_REQUESTS_PATH = "/mis-solicitudes"
+
+	function getToken() {
+		return localStorage.getItem("rh_token") || localStorage.getItem("token") || ""
+	}
 
 	function iconPath(name) {
 		switch (name) {
@@ -39,6 +47,10 @@
 				return "M12 21a9 9 0 1 0-9-9 9 9 0 0 0 9 9Zm-4-9 2.3 2.3L16.5 8"
 			case "eye":
 				return "M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6Zm10 3a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"
+			case "edit":
+				return "M4 20h4l10-10-4-4L4 16v4Zm9-13 4 4"
+			case "trash":
+				return "M6 7h12M9 7V5h6v2M8 7l1 13h6l1-13"
 			default:
 				return ""
 		}
@@ -101,19 +113,124 @@
 			request?.fechaCreacion ??
 			request?.fecha ??
 			request?.submittedAt ??
+			request?.createdAtUtc ??
+			request?.raw?.createdAt ??
+			request?.raw?.createdAtUtc ??
 			null
 		)
+	}
+
+	function normalizeStatusName(value) {
+		const normalized = String(value ?? "").trim().toLowerCase()
+
+		if (!normalized) return ""
+		if (normalized === "nueva" || normalized === "new") return "Nueva"
+		if (normalized === "en proceso" || normalized === "enproceso" || normalized === "in progress" || normalized === "inprogress") return "En Proceso"
+		if (normalized === "resuelta" || normalized === "resolved") return "Resuelta"
+		if (normalized === "cerrada" || normalized === "closed") return "Cerrada"
+		if (normalized === "rechazada" || normalized === "rejected") return "Rechazada"
+
+		return String(value ?? "").trim()
+	}
+
+	function buildStatusKey(statusName) {
+		const normalized = String(statusName ?? "").trim().toLowerCase()
+
+		if (normalized === "nueva") return "new"
+		if (normalized === "en proceso") return "in-progress"
+		if (normalized === "resuelta") return "resolved"
+		if (normalized === "cerrada") return "closed"
+		if (normalized === "rechazada") return "rejected"
+
+		return "unknown"
 	}
 
 	function normalizeRequest(request) {
 		const rawDate = resolveRequestDate(request)
 
+		const requestNumber =
+			request?.requestNumber ||
+			request?.number ||
+			request?.raw?.requestNumber ||
+			request?.raw?.number ||
+			""
+
+		const areaName =
+			request?.areaName ||
+			request?.area ||
+			request?.raw?.areaName ||
+			request?.raw?.area ||
+			""
+
+		const priorityName =
+			request?.priorityName ||
+			request?.priority ||
+			request?.raw?.priorityName ||
+			request?.raw?.priority ||
+			""
+
+		const statusName = normalizeStatusName(
+			request?.statusName ||
+			request?.status ||
+			request?.raw?.statusName ||
+			request?.raw?.status ||
+			""
+		)
+
 		return {
 			...request,
+			id: request?.id ?? request?.raw?.id ?? request?.raw?.requestId ?? request?.raw?.serviceRequestId ?? null,
 			rawDate,
 			createdAtLabel: request?.createdAtLabel || formatDateLabel(rawDate),
-			dateFilterValue: formatDateInputValue(rawDate)
+			dateFilterValue: formatDateInputValue(rawDate),
+			requestNumber,
+			areaName,
+			priorityName,
+			statusName,
+			statusKey: request?.statusKey || buildStatusKey(statusName),
+			canEdit: Boolean(request?.canEdit ?? request?.raw?.canEdit),
+			canDelete: Boolean(request?.canDelete ?? request?.raw?.canDelete)
 		}
+	}
+
+	async function apiRequest(path, { method = "GET" } = {}) {
+		const token = getToken()
+
+		const headers = {
+			Accept: "application/json"
+		}
+
+		if (token) {
+			headers.Authorization = `Bearer ${token}`
+		}
+
+		const response = await fetch(`${API_BASE}${path}`, {
+			method,
+			headers
+		})
+
+		if (!response.ok) {
+			let message = `HTTP ${response.status}`
+
+			try {
+				const data = await response.clone().json()
+				message = data?.message || data?.title || message
+			} catch {
+				try {
+					const text = await response.clone().text()
+					if (text) message = text
+				} catch {
+				}
+			}
+
+			throw new Error(message)
+		}
+
+		if (response.status === 204) return null
+
+		const contentType = response.headers.get("content-type") || ""
+		if (contentType.includes("application/json")) return await response.json()
+		return await response.text()
 	}
 
 	async function loadRequests() {
@@ -133,7 +250,46 @@
 
 	function openRequest(request) {
 		if (!request?.id) return
-		router.push(`/requests/${request.id}`)
+
+		router.push({
+			name: "RequestDetail",
+			params: { id: request.id }
+		})
+	}
+
+	function editRequest(request) {
+		if (!request?.id || !request?.canEdit) return
+
+		router.push({
+			path: MY_REQUESTS_PATH,
+			query: {
+				editId: String(request.id),
+				mode: "edit",
+				t: String(Date.now())
+			}
+		})
+	}
+
+	async function removeRequest(request) {
+		if (!request?.id || !request?.canDelete) return
+
+		const confirmed = window.confirm(`¿Deseas eliminar la solicitud ${request.requestNumber || ""}?`)
+		if (!confirmed) return
+
+		deletingId.value = request.id
+		loadError.value = ""
+
+		try {
+			await apiRequest(`/api/ServiceRequests/${request.id}`, {
+				method: "DELETE"
+			})
+
+			await loadRequests()
+		} catch (error) {
+			loadError.value = error?.message || "No se pudo eliminar la solicitud."
+		} finally {
+			deletingId.value = null
+		}
 	}
 
 	const statusOptions = computed(() => buildUniqueStatusOptions(requests.value))
@@ -314,9 +470,26 @@
 							</td>
 							<td>{{ request.createdAtLabel }}</td>
 							<td class="td-actions">
-								<button class="action-btn" type="button" @click="openRequest(request)">
-									<svg viewBox="0 0 24 24"><path :d="iconPath('eye')" /></svg>
-								</button>
+								<div class="actions-row">
+									<button class="action-btn" type="button" @click="openRequest(request)">
+										<svg viewBox="0 0 24 24"><path :d="iconPath('eye')" /></svg>
+									</button>
+
+									<button v-if="request.canEdit"
+											class="action-btn action-btn--edit"
+											type="button"
+											@click="editRequest(request)">
+										<svg viewBox="0 0 24 24"><path :d="iconPath('edit')" /></svg>
+									</button>
+
+									<button v-if="request.canDelete"
+											class="action-btn action-btn--delete"
+											type="button"
+											:disabled="deletingId === request.id"
+											@click="removeRequest(request)">
+										<svg viewBox="0 0 24 24"><path :d="iconPath('trash')" /></svg>
+									</button>
+								</div>
 							</td>
 						</tr>
 					</tbody>
@@ -632,6 +805,13 @@
 		text-align: right;
 	}
 
+	.actions-row {
+		display: flex;
+		justify-content: flex-end;
+		align-items: center;
+		gap: 8px;
+	}
+
 	.status-badge {
 		display: inline-flex;
 		align-items: center;
@@ -659,6 +839,16 @@
 		color: #2c8a6a;
 	}
 
+	.status-badge--closed {
+		background: rgba(184, 194, 218, 0.2);
+		color: rgba(72, 89, 125, 0.98);
+	}
+
+	.status-badge--rejected {
+		background: rgba(255, 90, 130, 0.12);
+		color: rgba(170, 40, 80, 0.98);
+	}
+
 	.status-badge--unknown {
 		background: rgba(94, 106, 210, 0.12);
 		color: #4c5699;
@@ -676,18 +866,31 @@
 		color: #5b49c6;
 	}
 
-		.action-btn svg {
-			width: 16px;
-			height: 16px;
-		}
+	.action-btn--edit {
+		color: #5b49c6;
+	}
 
-		.action-btn path {
-			fill: none;
-			stroke: currentColor;
-			stroke-width: 2;
-			stroke-linecap: round;
-			stroke-linejoin: round;
-		}
+	.action-btn--delete {
+		color: #c04a62;
+	}
+
+	.action-btn:disabled {
+		opacity: 0.65;
+		cursor: not-allowed;
+	}
+
+	.action-btn svg {
+		width: 16px;
+		height: 16px;
+	}
+
+	.action-btn path {
+		fill: none;
+		stroke: currentColor;
+		stroke-width: 2;
+		stroke-linecap: round;
+		stroke-linejoin: round;
+	}
 
 	.table-empty {
 		text-align: center;

@@ -67,11 +67,16 @@ public class AuthController(AppDbContext dbContext, IOptions<JwtOptions> jwtOpti
             new("fullName", user.FullName ?? string.Empty),
             new("role", normalizedRole),
             new(ClaimTypes.Role, normalizedRole),
-            new(ClaimTypes.Name, user.Username ?? string.Empty)
+            new(ClaimTypes.NameIdentifier, user.Id.ToString()),
+            new(ClaimTypes.Name, user.Username ?? string.Empty),
+            new(ClaimTypes.Email, user.Email ?? string.Empty)
         };
 
         if (normalizedAreaId.HasValue)
+        {
             claims.Add(new Claim("areaId", normalizedAreaId.Value.ToString()));
+            claims.Add(new Claim("AreaId", normalizedAreaId.Value.ToString()));
+        }
 
         var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_jwtOptions.Key));
         var credentials = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
@@ -122,18 +127,26 @@ public class AuthController(AppDbContext dbContext, IOptions<JwtOptions> jwtOpti
     {
         var value = (role ?? string.Empty).Trim();
 
-        if (value.Equals("Administrador", StringComparison.OrdinalIgnoreCase))
-            return "Admin";
+        if (string.IsNullOrWhiteSpace(value))
+            return string.Empty;
 
-        if (value.Equals("Super Admin", StringComparison.OrdinalIgnoreCase))
-            return "SuperAdmin";
+        var compact = value.Replace("_", "").Replace(" ", "").Trim().ToLowerInvariant();
 
-        return value;
+        return compact switch
+        {
+            "superadmin" => "SuperAdmin",
+            "admin" => "Admin",
+            "administrador" => "Admin",
+            "gestor" => "Gestor",
+            "solicitante" => "Solicitante",
+            _ => value
+        };
     }
 
     private static bool RequiresArea(string role)
     {
-        return role.Equals("Admin", StringComparison.OrdinalIgnoreCase)
-            || role.Equals("Gestor", StringComparison.OrdinalIgnoreCase);
+        var normalizedRole = NormalizeRole(role);
+
+        return normalizedRole == "Admin" || normalizedRole == "Gestor";
     }
 }

@@ -7,32 +7,37 @@
 	const auth = useAuthStore()
 
 	const roles = [
-		{ key: "Solicitante", label: "Solicitante" },
-		{ key: "Gestor", label: "Gestor" },
-		{ key: "Admin", label: "Administrador" },
-		{ key: "SuperAdmin", label: "SuperAdmin" }
+		{ key: "solicitante", label: "Solicitante" },
+		{ key: "gestor", label: "Gestor" },
+		{ key: "admin", label: "Administrador" },
+		{ key: "superadmin", label: "SuperAdmin" }
 	]
 
-	const role = ref("Solicitante")
+	const role = ref("solicitante")
 	const username = ref("")
 	const password = ref("")
 	const showPassword = ref(false)
 	const error = ref("")
 	const isSubmitting = ref(false)
 
-	const selectedRoleMap = {
-		Solicitante: "Solicitante",
-		Gestor: "Gestor",
-		Admin: "Admin",
-		SuperAdmin: "SuperAdmin"
+	function normalizeRole(value) {
+		return String(value ?? "").trim().toLowerCase()
 	}
 
 	const roleHint = computed(() => {
-		if (role.value === "Solicitante") return "Crea y da seguimiento a tus solicitudes"
-		if (role.value === "Gestor") return "Gestiona solicitudes del área asignada"
-		if (role.value === "SuperAdmin") return "Administra usuarios, áreas y supervisa todo el sistema"
+		if (role.value === "solicitante") return "Crea y da seguimiento a tus solicitudes"
+		if (role.value === "gestor") return "Gestiona solicitudes del área asignada"
+		if (role.value === "superadmin") return "Administra usuarios, áreas y supervisa todo el sistema"
 		return "Administra catálogos y supervisa las solicitudes del sistema"
 	})
+
+	function getHomeByRole(userRole) {
+		const normalized = normalizeRole(userRole)
+		if (normalized === "superadmin") return "/dashboardview"
+		if (normalized === "admin" || normalized === "gestor") return "/bandeja"
+		if (normalized === "solicitante") return "/mis-solicitudes"
+		return "/login"
+	}
 
 	const submit = async () => {
 		error.value = ""
@@ -55,8 +60,14 @@
 		try {
 			await auth.login(email, userPassword)
 
-			const expectedRole = selectedRoleMap[role.value]
-			const actualRole = auth.role
+			const expectedRole = normalizeRole(role.value)
+			const actualRole = normalizeRole(auth.role || auth.user?.role)
+
+			if (!actualRole) {
+				auth.logout()
+				error.value = "No se pudo determinar el rol de la cuenta"
+				return
+			}
 
 			if (expectedRole !== actualRole) {
 				auth.logout()
@@ -64,8 +75,9 @@
 				return
 			}
 
-			router.push("/dashboardview")
+			router.replace(getHomeByRole(actualRole))
 		} catch (e) {
+			auth.logout()
 			error.value = e?.response?.data?.message || e?.message || "No se pudo iniciar sesión"
 		} finally {
 			isSubmitting.value = false
@@ -116,7 +128,7 @@
 							:aria-selected="role === r.key"
 							@click="role = r.key">
 						<span class="role-icon" aria-hidden="true">
-							<svg v-if="r.key === 'Solicitante'" viewBox="0 0 24 24">
+							<svg v-if="r.key === 'solicitante'" viewBox="0 0 24 24">
 								<path d="M12 12a4 4 0 1 0-4-4 4 4 0 0 0 4 4Z"
 									  fill="none"
 									  stroke="currentColor"
@@ -130,7 +142,7 @@
 									  stroke-linecap="round" />
 							</svg>
 
-							<svg v-else-if="r.key === 'Gestor'" viewBox="0 0 24 24">
+							<svg v-else-if="r.key === 'gestor'" viewBox="0 0 24 24">
 								<path d="M9 5h6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
 								<path d="M9 3h6a2 2 0 0 1 2 2v16H7V5a2 2 0 0 1 2-2Z"
 									  fill="none"
@@ -358,7 +370,7 @@
 
 	.roles {
 		display: grid;
-		grid-template-columns: repeat(3, 1fr);
+		grid-template-columns: repeat(2, 1fr);
 		gap: 10px;
 	}
 
