@@ -334,8 +334,15 @@ public class UsersController(AppDbContext dbContext) : ControllerBase
         if (user is null)
             return NotFound(new { message = "Usuario no encontrado" });
 
-        var currentUsername = User.FindFirst("username")?.Value ?? string.Empty;
-        var currentEmail = User.FindFirst("email")?.Value ?? string.Empty;
+        var currentUsername =
+            User.FindFirst("username")?.Value ??
+            User.FindFirst(ClaimTypes.Name)?.Value ??
+            string.Empty;
+
+        var currentEmail =
+            User.FindFirst("email")?.Value ??
+            User.FindFirst(ClaimTypes.Email)?.Value ??
+            string.Empty;
 
         if ((!string.IsNullOrWhiteSpace(currentUsername) && user.Username.Equals(currentUsername, StringComparison.OrdinalIgnoreCase)) ||
             (!string.IsNullOrWhiteSpace(currentEmail) && user.Email.Equals(currentEmail, StringComparison.OrdinalIgnoreCase)))
@@ -381,9 +388,14 @@ public class UsersController(AppDbContext dbContext) : ControllerBase
 
     private string GetCurrentRole()
     {
-        return User.FindFirst("role")?.Value
-            ?? User.FindFirst(ClaimTypes.Role)?.Value
-            ?? string.Empty;
+        var rawRole =
+            User.FindFirst("role")?.Value ??
+            User.FindFirst("Role")?.Value ??
+            User.FindFirst(ClaimTypes.Role)?.Value ??
+            User.Claims.FirstOrDefault(x => x.Type.EndsWith("/role", StringComparison.OrdinalIgnoreCase))?.Value ??
+            string.Empty;
+
+        return NormalizeRole(rawRole);
     }
 
     private int? GetCurrentAreaId()
@@ -406,20 +418,23 @@ public class UsersController(AppDbContext dbContext) : ControllerBase
 
     private static bool IsSuperAdmin(string role)
     {
-        return role.Equals("SuperAdmin", StringComparison.OrdinalIgnoreCase);
+        return NormalizeRole(role) == "SuperAdmin";
     }
 
     private static bool IsAdmin(string role)
     {
-        return role.Equals("Admin", StringComparison.OrdinalIgnoreCase);
+        return NormalizeRole(role) == "Admin";
     }
 
     private static bool CanAssignRole(string currentRole, string targetRole)
     {
-        if (IsSuperAdmin(currentRole))
+        var normalizedCurrentRole = NormalizeRole(currentRole);
+        var normalizedTargetRole = NormalizeRole(targetRole);
+
+        if (normalizedCurrentRole == "SuperAdmin")
             return true;
 
-        if (IsAdmin(currentRole) && !targetRole.Equals("SuperAdmin", StringComparison.OrdinalIgnoreCase))
+        if (normalizedCurrentRole == "Admin" && normalizedTargetRole != "SuperAdmin")
             return true;
 
         return false;
@@ -427,16 +442,19 @@ public class UsersController(AppDbContext dbContext) : ControllerBase
 
     private static bool CanManageTargetUser(string currentRole, int? currentAreaId, User targetUser)
     {
-        if (IsSuperAdmin(currentRole))
+        var normalizedCurrentRole = NormalizeRole(currentRole);
+        var normalizedTargetRole = NormalizeRole(targetUser.Role);
+
+        if (normalizedCurrentRole == "SuperAdmin")
             return true;
 
-        if (!IsAdmin(currentRole))
+        if (normalizedCurrentRole != "Admin")
             return false;
 
         if (!currentAreaId.HasValue)
             return false;
 
-        if ((targetUser.Role ?? string.Empty).Equals("SuperAdmin", StringComparison.OrdinalIgnoreCase))
+        if (normalizedTargetRole == "SuperAdmin")
             return false;
 
         return targetUser.AreaId == currentAreaId.Value;
@@ -444,10 +462,12 @@ public class UsersController(AppDbContext dbContext) : ControllerBase
 
     private static int? ResolveAreaIdForWrite(string currentRole, int? currentAreaId, int? requestedAreaId, bool requiresArea)
     {
-        if (IsSuperAdmin(currentRole))
+        var normalizedCurrentRole = NormalizeRole(currentRole);
+
+        if (normalizedCurrentRole == "SuperAdmin")
             return requiresArea ? requestedAreaId : null;
 
-        if (IsAdmin(currentRole))
+        if (normalizedCurrentRole == "Admin")
             return requiresArea ? currentAreaId : null;
 
         return null;
@@ -455,17 +475,28 @@ public class UsersController(AppDbContext dbContext) : ControllerBase
 
     private static bool RoleRequiresArea(string role)
     {
-        return role.Equals("Admin", StringComparison.OrdinalIgnoreCase)
-            || role.Equals("Gestor", StringComparison.OrdinalIgnoreCase);
+        var normalizedRole = NormalizeRole(role);
+
+        return normalizedRole == "Admin" || normalizedRole == "Gestor";
     }
 
     private static string NormalizeRole(string role)
     {
         var value = (role ?? string.Empty).Trim();
 
-        if (value.Equals("Administrador", StringComparison.OrdinalIgnoreCase))
-            return "Admin";
+        if (string.IsNullOrWhiteSpace(value))
+            return string.Empty;
 
-        return value;
+        var compact = value.Replace("_", "").Replace(" ", "").Trim().ToLowerInvariant();
+
+        return compact switch
+        {
+            "superadmin" => "SuperAdmin",
+            "admin" => "Admin",
+            "administrador" => "Admin",
+            "gestor" => "Gestor",
+            "solicitante" => "Solicitante",
+            _ => value
+        };
     }
 }

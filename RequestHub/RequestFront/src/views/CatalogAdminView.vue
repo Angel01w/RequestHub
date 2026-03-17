@@ -49,16 +49,47 @@
 	const typeErrors = ref({ name: "", areaId: "" })
 	const userErrors = ref({ name: "", email: "", password: "", role: "", areaId: "" })
 
+	function normalizeRole(value) {
+		return String(value ?? "").trim().toLowerCase()
+	}
+
+	function getStoredUser() {
+		try {
+			return JSON.parse(localStorage.getItem("rh_user") || localStorage.getItem("user") || "null")
+		} catch {
+			return null
+		}
+	}
+
+	function getToken() {
+		return auth.token || localStorage.getItem("rh_token") || localStorage.getItem("token") || ""
+	}
+
 	const pageTitle = computed(() => "Administración")
 	const pageSubtitle = computed(() => "Gestiona los catálogos y configuraciones del sistema")
 
-	const normalizedRole = computed(() => String(auth.role || "").trim())
-	const isAdmin = computed(() => normalizedRole.value === "Admin")
-	const isSuperAdmin = computed(() => normalizedRole.value === "SuperAdmin")
-	const canManageCatalogs = computed(() => isAdmin.value || isSuperAdmin.value)
-	const canManageUsers = computed(() => isAdmin.value || isSuperAdmin.value)
-	const isAuthorized = computed(() => canManageCatalogs.value)
+	const normalizedRole = computed(() =>
+		normalizeRole(auth.user?.role || auth.role || getStoredUser()?.role)
+	)
+
+	const isAdmin = computed(() => normalizedRole.value === "admin")
+	const isSuperAdmin = computed(() => normalizedRole.value === "superadmin")
+
+	const canViewCatalogPage = computed(() => isAdmin.value || isSuperAdmin.value)
+	const canManageAreas = computed(() => isSuperAdmin.value)
+	const canManageTypes = computed(() => isAdmin.value || isSuperAdmin.value)
+	const canViewUsers = computed(() => isAdmin.value || isSuperAdmin.value)
+	const canManageUsers = computed(() => isSuperAdmin.value)
 	const canDeleteUsers = computed(() => isSuperAdmin.value)
+
+	const isAuthorized = computed(() => canViewCatalogPage.value)
+
+	const canCreateCurrentTab = computed(() => {
+		if (activeTab.value === "area") return canManageAreas.value
+		if (activeTab.value === "type") return canManageTypes.value
+		if (activeTab.value === "user") return canManageUsers.value
+		return false
+	})
 
 	const newButtonLabel = computed(() => {
 		if (activeTab.value === "area") return "Nueva Área"
@@ -119,10 +150,7 @@
 	}
 
 	async function api(path, { method = "GET", body } = {}) {
-		const token = auth.token || localStorage.getItem("token") || ""
-
-		console.log("TOKEN_RAW", token)
-		console.log("AUTH_HEADER", token ? `Bearer ${token}` : "")
+		const token = getToken()
 
 		const headers = {
 			Accept: "application/json"
@@ -143,6 +171,11 @@
 		})
 
 		if (!res.ok) {
+			if (res.status === 401) {
+				auth.logout()
+				router.replace("/login")
+			}
+
 			throw new Error(await readResponseError(res))
 		}
 
@@ -190,6 +223,8 @@
 	}
 
 	function openCreate() {
+		if (!canCreateCurrentTab.value) return
+
 		if (activeTab.value === "area") {
 			resetAreaForm()
 			isAreaModalOpen.value = true
@@ -207,6 +242,7 @@
 	}
 
 	function openEditArea(area) {
+		if (!canManageAreas.value) return
 		editingAreaId.value = normalizeId(area.id)
 		areaForm.value = { name: toStr(area.name) }
 		areaErrors.value = { name: "" }
@@ -214,6 +250,7 @@
 	}
 
 	function openEditType(type) {
+		if (!canManageTypes.value) return
 		editingTypeId.value = normalizeId(type.id)
 		typeForm.value = {
 			name: toStr(type.name),
@@ -224,6 +261,7 @@
 	}
 
 	function openEditUser(user) {
+		if (!canManageUsers.value) return
 		editingUserId.value = normalizeId(user.id)
 		userForm.value = {
 			name: toStr(user.fullName),
@@ -477,7 +515,7 @@
 	}
 
 	async function loadUsers() {
-		if (!canManageUsers.value) {
+		if (!canViewUsers.value) {
 			apiErrorUsers.value = "No autorizado"
 			users.value = []
 			isLoadingUsers.value = false
@@ -500,6 +538,11 @@
 	}
 
 	async function onSaveArea() {
+		if (!canManageAreas.value) {
+			apiErrorAreas.value = "No autorizado"
+			return
+		}
+
 		if (!validateArea()) return
 
 		apiErrorAreas.value = ""
@@ -541,6 +584,11 @@
 	}
 
 	async function onDeleteArea(area) {
+		if (!canManageAreas.value) {
+			apiErrorAreas.value = "No autorizado"
+			return
+		}
+
 		const name = toStr(area?.name).trim()
 		const id = normalizeId(area?.id)
 
@@ -565,6 +613,11 @@
 	}
 
 	async function onSaveType() {
+		if (!canManageTypes.value) {
+			apiErrorTypes.value = "No autorizado"
+			return
+		}
+
 		if (!validateType()) return
 
 		apiErrorTypes.value = ""
@@ -607,6 +660,11 @@
 	}
 
 	async function onDeleteType(type) {
+		if (!canManageTypes.value) {
+			apiErrorTypes.value = "No autorizado"
+			return
+		}
+
 		const name = toStr(type?.name).trim()
 		const id = normalizeId(type?.id)
 
@@ -760,7 +818,7 @@
 	onMounted(async () => {
 		window.addEventListener("keydown", onKey)
 
-		if (!auth.token) {
+		if (!getToken()) {
 			router.replace("/login")
 			return
 		}
@@ -855,7 +913,10 @@
 					</button>
 				</div>
 
-				<button class="new" type="button" @click="openCreate" :disabled="!isAuthorized || (activeTab === 'user' && !canManageUsers)">
+				<button class="new"
+						type="button"
+						@click="openCreate"
+						:disabled="!canCreateCurrentTab">
 					<span class="new__icon" aria-hidden="true">
 						<svg viewBox="0 0 24 24"><path :d="iconPath('plus')" /></svg>
 					</span>
@@ -895,18 +956,21 @@
 						<tr v-else v-for="a in filteredAreas" :key="a.id">
 							<td>{{ a.name }}</td>
 							<td class="td-actions">
-								<button class="btn btn--edit" type="button" @click="openEditArea(a)">
-									<span class="btn__icon" aria-hidden="true">
-										<svg viewBox="0 0 24 24"><path :d="iconPath('pencil')" /></svg>
-									</span>
-									Editar
-								</button>
-								<button class="btn btn--del" type="button" @click="onDeleteArea(a)">
-									<span class="btn__icon" aria-hidden="true">
-										<svg viewBox="0 0 24 24"><path :d="iconPath('trash')" /></svg>
-									</span>
-									Eliminar
-								</button>
+								<template v-if="canManageAreas">
+									<button class="btn btn--edit" type="button" @click="openEditArea(a)">
+										<span class="btn__icon" aria-hidden="true">
+											<svg viewBox="0 0 24 24"><path :d="iconPath('pencil')" /></svg>
+										</span>
+										Editar
+									</button>
+									<button class="btn btn--del" type="button" @click="onDeleteArea(a)">
+										<span class="btn__icon" aria-hidden="true">
+											<svg viewBox="0 0 24 24"><path :d="iconPath('trash')" /></svg>
+										</span>
+										Eliminar
+									</button>
+								</template>
+								<span v-else class="noActions">Sin acciones</span>
 							</td>
 						</tr>
 					</tbody>
@@ -971,18 +1035,21 @@
 							<td><span class="roleChip">{{ u.role }}</span></td>
 							<td>{{ areaNameById(u.areaId) || "Todas" }}</td>
 							<td class="td-actions">
-								<button class="btn btn--edit" type="button" @click="openEditUser(u)">
-									<span class="btn__icon" aria-hidden="true">
-										<svg viewBox="0 0 24 24"><path :d="iconPath('pencil')" /></svg>
-									</span>
-									Editar
-								</button>
-								<button class="btn btn--del" type="button" @click="onDeleteUser(u)" :disabled="!canDeleteUsers">
-									<span class="btn__icon" aria-hidden="true">
-										<svg viewBox="0 0 24 24"><path :d="iconPath('trash')" /></svg>
-									</span>
-									Eliminar
-								</button>
+								<template v-if="canManageUsers">
+									<button class="btn btn--edit" type="button" @click="openEditUser(u)">
+										<span class="btn__icon" aria-hidden="true">
+											<svg viewBox="0 0 24 24"><path :d="iconPath('pencil')" /></svg>
+										</span>
+										Editar
+									</button>
+									<button class="btn btn--del" type="button" @click="onDeleteUser(u)" :disabled="!canDeleteUsers">
+										<span class="btn__icon" aria-hidden="true">
+											<svg viewBox="0 0 24 24"><path :d="iconPath('trash')" /></svg>
+										</span>
+										Eliminar
+									</button>
+								</template>
+								<span v-else class="noActions">Sin acciones</span>
 							</td>
 						</tr>
 					</tbody>
@@ -1466,6 +1533,7 @@
 		display: flex;
 		gap: 10px;
 		justify-content: flex-end;
+		align-items: center;
 	}
 
 	.btn {
@@ -1511,6 +1579,12 @@
 	.btn--del {
 		border-color: rgba(255, 84, 120, 0.2);
 		color: rgba(220, 60, 96, 0.95);
+	}
+
+	.noActions {
+		font-size: 12px;
+		font-weight: 800;
+		color: rgba(39, 46, 86, 0.45);
 	}
 
 	.roleChip {

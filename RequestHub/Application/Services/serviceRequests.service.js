@@ -97,6 +97,10 @@ function normalizeStatusName(raw) {
 		return "Resuelta"
 	}
 
+	if (value === "rechazada" || value === "rechazado" || value === "rejected") {
+		return "Rechazada"
+	}
+
 	return firstNonEmpty(raw, "Nueva")
 }
 
@@ -106,6 +110,7 @@ function buildStatusKey(statusName) {
 	if (value === "nueva") return "new"
 	if (value === "en proceso") return "in-progress"
 	if (value === "resuelta") return "resolved"
+	if (value === "rechazada") return "rejected"
 
 	return value || "unknown"
 }
@@ -183,6 +188,14 @@ export function normalizeServiceRequest(item = {}) {
 		statusKey,
 		createdAt,
 		createdAtLabel,
+		canEdit: Boolean(item.canEdit),
+		canDelete: Boolean(item.canDelete),
+		canTake: Boolean(item.canTake),
+		canAssign: Boolean(item.canAssign),
+		canChangeStatus: Boolean(item.canChangeStatus),
+		canReject: Boolean(item.canReject),
+		canComment: Boolean(item.canComment),
+		canClose: Boolean(item.canClose),
 		raw: item
 	}
 }

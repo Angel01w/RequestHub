@@ -48,31 +48,112 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
             query = query.Where(x => x.Number.Contains(search) || x.Subject.Contains(search));
         }
 
-        var result = await query
+        var requests = await query
             .OrderByDescending(x => x.CreatedAtUtc)
-            .Select(x => new
-            {
-                id = x.Id,
-                number = x.Number,
-                subject = x.Subject,
-                description = x.Description,
-                status = x.Status.ToString(),
-                statusId = (int)x.Status,
-                statusName = x.Status.ToString(),
-                rejectionReason = x.RejectionReason,
-                createdAtUtc = x.CreatedAtUtc,
-                areaId = x.AreaId,
-                requestTypeId = x.RequestTypeId,
-                priorityId = x.PriorityId,
-                area = x.Area != null ? x.Area.Name : null,
-                priority = x.Priority != null ? x.Priority.Name : null,
-                requestType = x.RequestType != null ? x.RequestType.Name : null,
-                assignedToUserId = x.AssignedToUserId,
-                createdByUserId = x.CreatedByUserId,
-                attachmentPath = x.AttachmentPath,
-                attachmentName = x.AttachmentName
-            })
             .ToListAsync();
+
+        var result = requests.Select(x => new
+        {
+            id = x.Id,
+            number = x.Number,
+            subject = x.Subject,
+            description = x.Description,
+            status = x.Status.ToString(),
+            statusId = (int)x.Status,
+            statusName = x.Status.ToString(),
+            rejectionReason = x.RejectionReason,
+            createdAtUtc = x.CreatedAtUtc,
+            areaId = x.AreaId,
+            requestTypeId = x.RequestTypeId,
+            priorityId = x.PriorityId,
+            area = x.Area != null ? x.Area.Name : null,
+            priority = x.Priority != null ? x.Priority.Name : null,
+            requestType = x.RequestType != null ? x.RequestType.Name : null,
+            assignedToUserId = x.AssignedToUserId,
+            createdByUserId = x.CreatedByUserId,
+            attachmentPath = x.AttachmentPath,
+            attachmentName = x.AttachmentName,
+            canEdit = CanEditRequest(x),
+            canDelete = CanDeleteRequest(),
+            canTake = CanTakeRequest(x),
+            canAssign = CanAssignRequest(x),
+            canChangeStatus = CanChangeStatus(x),
+            canComment = CanComment(x),
+            canClose = CanCloseRequest(x)
+        });
+
+        return Ok(result);
+    }
+
+    [HttpGet("mine")]
+    public async Task<ActionResult<IEnumerable<object>>> Mine([FromQuery] ServiceRequestFilterDto filter)
+    {
+        var query = dbContext.ServiceRequests
+            .AsNoTracking()
+            .Include(x => x.Area)
+            .Include(x => x.Priority)
+            .Include(x => x.RequestType)
+            .Where(x => x.CreatedByUserId == currentUser.UserId);
+
+        if (filter.Status.HasValue)
+            query = query.Where(x => x.Status == filter.Status.Value);
+
+        if (filter.AreaId.HasValue)
+            query = query.Where(x => x.AreaId == filter.AreaId.Value);
+
+        if (filter.PriorityId.HasValue)
+            query = query.Where(x => x.PriorityId == filter.PriorityId.Value);
+
+        if (filter.FromUtc.HasValue)
+            query = query.Where(x => x.CreatedAtUtc >= filter.FromUtc.Value);
+
+        if (filter.ToUtc.HasValue)
+            query = query.Where(x => x.CreatedAtUtc <= filter.ToUtc.Value);
+
+        if (!string.IsNullOrWhiteSpace(filter.Search))
+        {
+            var search = filter.Search.Trim();
+            query = query.Where(x => x.Number.Contains(search) || x.Subject.Contains(search));
+        }
+
+        if (currentUser.Role == UserRole.Solicitante)
+            query = query.Where(x => x.CreatedByUserId == currentUser.UserId);
+        else if (currentUser.Role == UserRole.Admin || currentUser.Role == UserRole.Gestor)
+            return Forbid();
+
+        var requests = await query
+            .OrderByDescending(x => x.CreatedAtUtc)
+            .ToListAsync();
+
+        var result = requests.Select(x => new
+        {
+            id = x.Id,
+            number = x.Number,
+            subject = x.Subject,
+            description = x.Description,
+            status = x.Status.ToString(),
+            statusId = (int)x.Status,
+            statusName = x.Status.ToString(),
+            rejectionReason = x.RejectionReason,
+            createdAtUtc = x.CreatedAtUtc,
+            areaId = x.AreaId,
+            requestTypeId = x.RequestTypeId,
+            priorityId = x.PriorityId,
+            area = x.Area != null ? x.Area.Name : null,
+            priority = x.Priority != null ? x.Priority.Name : null,
+            requestType = x.RequestType != null ? x.RequestType.Name : null,
+            assignedToUserId = x.AssignedToUserId,
+            createdByUserId = x.CreatedByUserId,
+            attachmentPath = x.AttachmentPath,
+            attachmentName = x.AttachmentName,
+            canEdit = CanEditRequest(x),
+            canDelete = CanDeleteRequest(),
+            canTake = CanTakeRequest(x),
+            canAssign = CanAssignRequest(x),
+            canChangeStatus = CanChangeStatus(x),
+            canComment = CanComment(x),
+            canClose = CanCloseRequest(x)
+        });
 
         return Ok(result);
     }
@@ -120,6 +201,13 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
             createdByUserId = request.CreatedByUserId,
             createdByName = request.CreatedByUser != null ? request.CreatedByUser.FullName : null,
             assignedToName = request.AssignedToUser != null ? request.AssignedToUser.FullName : null,
+            canEdit = CanEditRequest(request),
+            canDelete = CanDeleteRequest(),
+            canTake = CanTakeRequest(request),
+            canAssign = CanAssignRequest(request),
+            canChangeStatus = CanChangeStatus(request),
+            canComment = CanComment(request),
+            canClose = CanCloseRequest(request),
             comments = request.Comments
                 .OrderBy(c => c.CreatedAtUtc)
                 .Select(c => new
@@ -180,25 +268,7 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
         if (creator is null)
             return Unauthorized(new { message = "Usuario autenticado no válido." });
 
-        string? attachmentPath = null;
-        string? attachmentName = null;
-
-        if (attachment is not null && attachment.Length > 0)
-        {
-            var uploads = Path.Combine(env.ContentRootPath, "uploads");
-            Directory.CreateDirectory(uploads);
-
-            var originalName = Path.GetFileName(attachment.FileName);
-            var extension = Path.GetExtension(originalName);
-            var fileName = $"{Guid.NewGuid():N}{extension}";
-            var fullPath = Path.Combine(uploads, fileName);
-
-            await using var stream = System.IO.File.Create(fullPath);
-            await attachment.CopyToAsync(stream);
-
-            attachmentPath = $"uploads/{fileName}";
-            attachmentName = originalName;
-        }
+        var uploaded = await SaveAttachmentAsync(attachment);
 
         var request = new ServiceRequest
         {
@@ -212,8 +282,8 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
             CreatedByUserId = currentUser.UserId,
             Status = TicketStatus.Nueva,
             RejectionReason = null,
-            AttachmentPath = attachmentPath,
-            AttachmentName = attachmentName
+            AttachmentPath = uploaded.Path,
+            AttachmentName = uploaded.Name
         };
 
         dbContext.ServiceRequests.Add(request);
@@ -269,11 +339,14 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
         if (request is null)
             return NotFound(new { message = "Solicitud no encontrada." });
 
-        if (!CanAccessRequest(request))
+        if (!CanEditRequest(request))
             return Forbid();
 
         var isSolicitante = currentUser.Role == UserRole.Solicitante;
-        var isAdminOrSuperAdmin = currentUser.Role == UserRole.Admin || currentUser.Role == UserRole.SuperAdmin;
+        var isSuperAdmin = currentUser.Role == UserRole.SuperAdmin;
+
+        if (!isSolicitante && !isSuperAdmin)
+            return Forbid();
 
         if (isSolicitante)
         {
@@ -303,49 +376,21 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
         if (string.IsNullOrWhiteSpace(dto.Description))
             return BadRequest(new { message = "La descripción es requerida." });
 
-        TicketStatus newStatus;
-
-        if (isSolicitante)
-        {
-            newStatus = TicketStatus.Nueva;
-        }
-        else
-        {
-            if (!Enum.IsDefined(typeof(TicketStatus), dto.StatusId))
-                return BadRequest(new { message = "Estado inválido." });
-
-            newStatus = (TicketStatus)dto.StatusId;
-
-            if (newStatus == TicketStatus.Cerrada && !isAdminOrSuperAdmin)
-                return BadRequest(new { message = "Solo un administrador puede cerrar solicitudes." });
-
-            if (newStatus == TicketStatus.Rechazada && string.IsNullOrWhiteSpace(dto.RejectionReason))
-                return BadRequest(new { message = "Debe especificar motivo de rechazo." });
-        }
-
         var attachmentPath = request.AttachmentPath;
         var attachmentName = request.AttachmentName;
 
         if (dto.RemoveAttachment)
         {
+            DeleteAttachmentIfExists(request.AttachmentPath);
             attachmentPath = null;
             attachmentName = null;
         }
         else if (dto.Attachment is not null && dto.Attachment.Length > 0)
         {
-            var uploads = Path.Combine(env.ContentRootPath, "uploads");
-            Directory.CreateDirectory(uploads);
-
-            var originalName = Path.GetFileName(dto.Attachment.FileName);
-            var extension = Path.GetExtension(originalName);
-            var fileName = $"{Guid.NewGuid():N}{extension}";
-            var fullPath = Path.Combine(uploads, fileName);
-
-            await using var stream = System.IO.File.Create(fullPath);
-            await dto.Attachment.CopyToAsync(stream);
-
-            attachmentPath = $"uploads/{fileName}";
-            attachmentName = originalName;
+            DeleteAttachmentIfExists(request.AttachmentPath);
+            var uploaded = await SaveAttachmentAsync(dto.Attachment);
+            attachmentPath = uploaded.Path;
+            attachmentName = uploaded.Name;
         }
 
         request.AreaId = dto.AreaId;
@@ -353,10 +398,30 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
         request.Subject = dto.Subject.Trim();
         request.Description = dto.Description.Trim();
         request.PriorityId = dto.PriorityId;
-        request.Status = newStatus;
-        request.RejectionReason = newStatus == TicketStatus.Rechazada ? dto.RejectionReason?.Trim() : null;
         request.AttachmentPath = attachmentPath;
         request.AttachmentName = attachmentName;
+
+        if (isSolicitante)
+        {
+            request.Status = TicketStatus.Nueva;
+            request.RejectionReason = null;
+        }
+        else if (isSuperAdmin)
+        {
+            if (Enum.IsDefined(typeof(TicketStatus), dto.StatusId))
+            {
+                var newStatus = (TicketStatus)dto.StatusId;
+
+                if (IsCloseStatus(newStatus))
+                    return BadRequest(new { message = "Solo un administrador puede cerrar solicitudes." });
+
+                if (IsRejectedStatus(newStatus) && string.IsNullOrWhiteSpace(dto.RejectionReason))
+                    return BadRequest(new { message = "Debe especificar motivo de rechazo." });
+
+                request.Status = newStatus;
+                request.RejectionReason = IsRejectedStatus(newStatus) ? dto.RejectionReason?.Trim() : null;
+            }
+        }
 
         await dbContext.SaveChangesAsync();
 
@@ -402,6 +467,9 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
     [HttpDelete("{id:int}")]
     public async Task<ActionResult> Delete(int id)
     {
+        if (!CanDeleteRequest())
+            return Forbid();
+
         var request = await dbContext.ServiceRequests
             .Include(x => x.Comments)
             .Include(x => x.HistoryEntries)
@@ -410,14 +478,7 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
         if (request is null)
             return NotFound(new { message = "Solicitud no encontrada." });
 
-        if (!CanAccessRequest(request))
-            return Forbid();
-
-        if (currentUser.Role == UserRole.Solicitante)
-        {
-            if (request.CreatedByUserId != currentUser.UserId || request.Status != TicketStatus.Nueva)
-                return BadRequest(new { message = "Solo puedes eliminar tus solicitudes en estado Nueva." });
-        }
+        DeleteAttachmentIfExists(request.AttachmentPath);
 
         if (request.Comments.Count != 0)
             dbContext.RequestComments.RemoveRange(request.Comments);
@@ -434,7 +495,7 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
     [HttpPost("{id:int}/take")]
     public async Task<ActionResult> Take(int id)
     {
-        if (currentUser.Role == UserRole.Solicitante)
+        if (currentUser.Role != UserRole.Admin && currentUser.Role != UserRole.Gestor && currentUser.Role != UserRole.SuperAdmin)
             return Forbid();
 
         var request = await dbContext.ServiceRequests.FindAsync(id);
@@ -445,7 +506,7 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
             return Forbid();
 
         request.AssignedToUserId = currentUser.UserId;
-        request.Status = request.Status == TicketStatus.Nueva ? TicketStatus.EnProceso : request.Status;
+        request.Status = IsNewStatus(request.Status) ? TicketStatus.EnProceso : request.Status;
 
         await dbContext.SaveChangesAsync();
 
@@ -481,6 +542,12 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
             if (user is null)
                 return BadRequest(new { message = "Usuario no válido." });
 
+            if (currentUser.Role == UserRole.Admin)
+            {
+                if (!currentUser.AreaId.HasValue || user.AreaId != currentUser.AreaId.Value)
+                    return BadRequest(new { message = "El usuario asignado no pertenece al área permitida." });
+            }
+
             request.AssignedToUserId = user.Id;
         }
         else
@@ -506,7 +573,7 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
     [HttpPost("{id:int}/status")]
     public async Task<ActionResult> ChangeStatus(int id, [FromBody] ChangeStatusDto dto)
     {
-        if (currentUser.Role == UserRole.Solicitante)
+        if (!CanAttemptStatusChange())
             return Forbid();
 
         var request = await dbContext.ServiceRequests.FindAsync(id);
@@ -516,14 +583,23 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
         if (!CanAccessRequest(request))
             return Forbid();
 
-        if (dto.Status == TicketStatus.Cerrada && currentUser.Role != UserRole.Admin && currentUser.Role != UserRole.SuperAdmin)
-            return BadRequest(new { message = "Solo un administrador puede cerrar solicitudes." });
+        if (!CanChangeStatus(request))
+            return Forbid();
 
-        if (dto.Status == TicketStatus.Rechazada && string.IsNullOrWhiteSpace(dto.RejectionReason))
+        if (IsCloseStatus(dto.Status))
+        {
+            if (currentUser.Role != UserRole.Admin)
+                return BadRequest(new { message = "Solo un administrador puede cerrar solicitudes." });
+
+            if (!IsCompletedForClose(request.Status))
+                return BadRequest(new { message = "Solo se puede cerrar una solicitud cuando está completa." });
+        }
+
+        if (IsRejectedStatus(dto.Status) && string.IsNullOrWhiteSpace(dto.RejectionReason))
             return BadRequest(new { message = "Debe especificar motivo de rechazo." });
 
         request.Status = dto.Status;
-        request.RejectionReason = dto.Status == TicketStatus.Rechazada ? dto.RejectionReason?.Trim() : null;
+        request.RejectionReason = IsRejectedStatus(dto.Status) ? dto.RejectionReason?.Trim() : null;
 
         await dbContext.SaveChangesAsync();
 
@@ -550,7 +626,7 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
     [HttpPost("{id:int}/comments")]
     public async Task<ActionResult> AddComment(int id, [FromBody] AddCommentDto dto)
     {
-        if (currentUser.Role == UserRole.Solicitante)
+        if (!CanAttemptComment())
             return Forbid();
 
         var request = await dbContext.ServiceRequests.FindAsync(id);
@@ -558,6 +634,9 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
             return NotFound(new { message = "Solicitud no encontrada." });
 
         if (!CanAccessRequest(request))
+            return Forbid();
+
+        if (!CanComment(request))
             return Forbid();
 
         if (string.IsNullOrWhiteSpace(dto.Text))
@@ -602,7 +681,7 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
     [HttpPut("{id:int}/comments/{commentId:int}")]
     public async Task<ActionResult> UpdateComment(int id, int commentId, [FromBody] AddCommentDto dto)
     {
-        if (currentUser.Role == UserRole.Solicitante)
+        if (!CanAttemptComment())
             return Forbid();
 
         if (string.IsNullOrWhiteSpace(dto.Text))
@@ -613,6 +692,9 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
             return NotFound(new { message = "Solicitud no encontrada." });
 
         if (!CanAccessRequest(request))
+            return Forbid();
+
+        if (!CanComment(request))
             return Forbid();
 
         var comment = await dbContext.RequestComments
@@ -650,7 +732,7 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
     [HttpDelete("{id:int}/comments/{commentId:int}")]
     public async Task<ActionResult> DeleteComment(int id, int commentId)
     {
-        if (currentUser.Role == UserRole.Solicitante)
+        if (!CanAttemptComment())
             return Forbid();
 
         var request = await dbContext.ServiceRequests.FirstOrDefaultAsync(x => x.Id == id);
@@ -658,6 +740,9 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
             return NotFound(new { message = "Solicitud no encontrada." });
 
         if (!CanAccessRequest(request))
+            return Forbid();
+
+        if (!CanComment(request))
             return Forbid();
 
         var comment = await dbContext.RequestComments
@@ -689,7 +774,7 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
             UserRole.SuperAdmin => query,
             UserRole.Admin => currentUser.AreaId.HasValue
                 ? query.Where(x => x.AreaId == currentUser.AreaId.Value)
-                : query,
+                : query.Where(x => false),
             UserRole.Gestor => currentUser.AreaId.HasValue
                 ? query.Where(x => x.AreaId == currentUser.AreaId.Value)
                 : query.Where(x => false),
@@ -703,11 +788,140 @@ public class ServiceRequestsController(AppDbContext dbContext, ICurrentUserAcces
         return currentUser.Role switch
         {
             UserRole.SuperAdmin => true,
-            UserRole.Admin => !currentUser.AreaId.HasValue || request.AreaId == currentUser.AreaId.Value,
+            UserRole.Admin => currentUser.AreaId.HasValue && request.AreaId == currentUser.AreaId.Value,
             UserRole.Gestor => currentUser.AreaId.HasValue && request.AreaId == currentUser.AreaId.Value,
             UserRole.Solicitante => request.CreatedByUserId == currentUser.UserId,
             _ => false
         };
+    }
+
+    private bool CanEditRequest(ServiceRequest request)
+    {
+        return currentUser.Role switch
+        {
+            UserRole.SuperAdmin => true,
+            UserRole.Solicitante => request.CreatedByUserId == currentUser.UserId && IsNewStatus(request.Status),
+            _ => false
+        };
+    }
+
+    private bool CanDeleteRequest()
+    {
+        return currentUser.Role == UserRole.SuperAdmin;
+    }
+
+    private bool CanTakeRequest(ServiceRequest request)
+    {
+        if (!CanAccessRequest(request))
+            return false;
+
+        return currentUser.Role == UserRole.Admin
+            || currentUser.Role == UserRole.Gestor
+            || currentUser.Role == UserRole.SuperAdmin;
+    }
+
+    private bool CanAssignRequest(ServiceRequest request)
+    {
+        if (!CanAccessRequest(request))
+            return false;
+
+        return currentUser.Role == UserRole.Admin
+            || currentUser.Role == UserRole.SuperAdmin;
+    }
+
+    private bool CanChangeStatus(ServiceRequest request)
+    {
+        if (!CanAccessRequest(request))
+            return false;
+
+        return currentUser.Role == UserRole.Admin
+            || currentUser.Role == UserRole.Gestor
+            || currentUser.Role == UserRole.SuperAdmin;
+    }
+
+    private bool CanComment(ServiceRequest request)
+    {
+        if (!CanAccessRequest(request))
+            return false;
+
+        return currentUser.Role == UserRole.Admin
+            || currentUser.Role == UserRole.Gestor
+            || currentUser.Role == UserRole.SuperAdmin;
+    }
+
+    private bool CanCloseRequest(ServiceRequest request)
+    {
+        return currentUser.Role == UserRole.Admin
+            && CanAccessRequest(request)
+            && IsCompletedForClose(request.Status);
+    }
+
+    private bool CanAttemptStatusChange()
+    {
+        return currentUser.Role == UserRole.Admin
+            || currentUser.Role == UserRole.Gestor
+            || currentUser.Role == UserRole.SuperAdmin;
+    }
+
+    private bool CanAttemptComment()
+    {
+        return currentUser.Role == UserRole.Admin
+            || currentUser.Role == UserRole.Gestor
+            || currentUser.Role == UserRole.SuperAdmin;
+    }
+
+    private static bool IsNewStatus(TicketStatus status)
+    {
+        return string.Equals(status.ToString(), nameof(TicketStatus.Nueva), StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsRejectedStatus(TicketStatus status)
+    {
+        return string.Equals(status.ToString(), nameof(TicketStatus.Rechazada), StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsCloseStatus(TicketStatus status)
+    {
+        return string.Equals(status.ToString(), nameof(TicketStatus.Cerrada), StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsCompletedForClose(TicketStatus status)
+    {
+        var name = status.ToString();
+        return string.Equals(name, "Completada", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(name, "Completa", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(name, "Completed", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private async Task<(string? Path, string? Name)> SaveAttachmentAsync(IFormFile? attachment)
+    {
+        if (attachment is null || attachment.Length == 0)
+            return (null, null);
+
+        var uploads = Path.Combine(env.ContentRootPath, "uploads");
+        Directory.CreateDirectory(uploads);
+
+        var originalName = Path.GetFileName(attachment.FileName);
+        var extension = Path.GetExtension(originalName);
+        var fileName = $"{Guid.NewGuid():N}{extension}";
+        var fullPath = Path.Combine(uploads, fileName);
+
+        await using var stream = System.IO.File.Create(fullPath);
+        await attachment.CopyToAsync(stream);
+
+        return ($"uploads/{fileName}", originalName);
+    }
+
+    private void DeleteAttachmentIfExists(string? relativePath)
+    {
+        if (string.IsNullOrWhiteSpace(relativePath))
+            return;
+
+        var normalized = relativePath.Replace("/", Path.DirectorySeparatorChar.ToString()).TrimStart(Path.DirectorySeparatorChar);
+        var fullPath = Path.Combine(env.ContentRootPath, normalized);
+
+        if (System.IO.File.Exists(fullPath))
+            System.IO.File.Delete(fullPath);
     }
 
     private static string BuildTemporaryRequestNumber()

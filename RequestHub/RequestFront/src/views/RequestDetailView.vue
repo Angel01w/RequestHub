@@ -1,9 +1,11 @@
 ﻿<script setup>
 	import { computed, onMounted, ref } from "vue"
 	import { useRoute, useRouter } from "vue-router"
+	import { useAuthStore } from "../stores/auth"
 
 	const route = useRoute()
 	const router = useRouter()
+	const auth = useAuthStore()
 
 	const API_BASE = (import.meta.env.VITE_API_BASE_URL || "https://localhost:7299").replace(/\/+$/, "")
 
@@ -21,6 +23,26 @@
 	const isDeletingCommentId = ref(null)
 
 	const requestId = computed(() => route.params.id)
+
+	function getStoredUser() {
+		try {
+			return JSON.parse(localStorage.getItem("rh_user") || localStorage.getItem("user") || "null")
+		} catch {
+			return null
+		}
+	}
+
+	function getToken() {
+		return auth.token || localStorage.getItem("rh_token") || localStorage.getItem("token") || ""
+	}
+
+	const currentRole = computed(() =>
+		String(auth.user?.role || auth.role || getStoredUser()?.role || "").trim().toLowerCase()
+	)
+
+	const canAccessDetail = computed(() =>
+		["superadmin", "admin", "gestor", "solicitante"].includes(currentRole.value)
+	)
 
 	const requestTitle = computed(() => {
 		const subject = cleanDisplayText(request.value?.subject || "")
@@ -334,12 +356,20 @@
 	}
 
 	async function apiRequest(url, options = {}) {
+		const token = getToken()
+
+		const headers = {
+			Accept: "application/json",
+			...(options.headers || {})
+		}
+
+		if (token) {
+			headers.Authorization = `Bearer ${token}`
+		}
+
 		const response = await fetch(url, {
 			...options,
-			headers: {
-				Accept: "application/json",
-				...(options.headers || {})
-			}
+			headers
 		})
 
 		const contentType = response.headers.get("content-type") || ""
@@ -353,11 +383,17 @@
 		}
 
 		if (!response.ok) {
+			if (response.status === 401) {
+				auth.logout()
+				router.replace("/login")
+			}
+
 			const message =
 				payload?.message ||
 				payload?.title ||
 				(typeof payload === "string" ? payload : "") ||
 				`HTTP ${response.status}`
+
 			const error = new Error(message)
 			error.status = response.status
 			throw error
@@ -482,7 +518,19 @@
 		router.back()
 	}
 
-	onMounted(loadRequestDetail)
+	onMounted(async () => {
+		if (!getToken()) {
+			router.replace("/login")
+			return
+		}
+
+		if (!canAccessDetail.value) {
+			router.replace("/login")
+			return
+		}
+
+		await loadRequestDetail()
+	})
 </script>
 
 <template>
