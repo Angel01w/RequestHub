@@ -72,6 +72,14 @@
 	const currentRoleInitial = computed(() => currentRole.value.charAt(0).toUpperCase() || "S");
 	const roleDescription = computed(() => currentRoleLower.value === "solicitante" ? "Ves solo tus solicitudes" : "Ves solo las solicitudes permitidas por tu rol");
 
+	const isSolicitante = computed(() => currentRoleLower.value === "solicitante");
+	const isAdmin = computed(() => currentRoleLower.value === "admin");
+	const isSuperAdmin = computed(() => currentRoleLower.value === "superadmin");
+	const canManageStatus = computed(() => isAdmin.value || isSuperAdmin.value);
+	const canEditFields = computed(() => isSolicitante.value || isSuperAdmin.value);
+	const showStatusField = computed(() => isEditing.value && canManageStatus.value);
+	const showRejectionReasonField = computed(() => showStatusField.value && canonicalStatusLabel(form.value.status) === "Rechazada");
+
 	const authHeaders = computed(() => {
 		const headers = {
 			Accept: "application/json"
@@ -90,7 +98,12 @@
 	const statusOptions = computed(() => requestStatusCatalog);
 
 	const modalTitle = computed(() => (isEditing.value ? "Editar Solicitud" : "Nueva Solicitud"));
-	const modalSubtitle = computed(() => (isEditing.value ? "Actualiza la información de la solicitud" : "Completa el formulario para crear tu solicitud"));
+	const modalSubtitle = computed(() => {
+		if (isEditing.value && canManageStatus.value && !canEditFields.value) {
+			return "Actualiza el estado de la solicitud";
+		}
+		return isEditing.value ? "Actualiza la información de la solicitud" : "Completa el formulario para crear tu solicitud";
+	});
 	const submitButtonText = computed(() => {
 		if (isSubmitting.value) return isEditing.value ? "Guardando..." : "Enviando...";
 		return isEditing.value ? "Guardar Cambios" : "Enviar Solicitud";
@@ -211,10 +224,15 @@
 	});
 
 	function canEditRequest(item) {
+		if (!item?.id) return false;
+		if (isSuperAdmin.value) return true;
+		if (isAdmin.value) return true;
 		return canonicalStatusLabel(item?.status) === "Nueva";
 	}
 
 	function canDeleteRequest(item) {
+		if (!item?.id) return false;
+		if (isSuperAdmin.value) return true;
 		return canonicalStatusLabel(item?.status) === "Nueva";
 	}
 
@@ -299,8 +317,8 @@
 		const resolvedTypeId = item.typeId || resolveTypeIdByName(item.typeName, form.value.areaId);
 		form.value.typeId = resolvedTypeId ? String(resolvedTypeId) : "";
 		form.value.priority = resolvePriorityLabel(item.priority, item.priorityId);
-		form.value.status = "Nueva";
-		form.value.rejectionReason = "";
+		form.value.status = canonicalStatusLabel(item.status) || "Nueva";
+		form.value.rejectionReason = item.rejectionReason || "";
 		form.value.createdAt = item.createdAt ? toIsoLocalDateTime(item.createdAt) : toIsoLocalDateTime(new Date());
 		form.value.subject = item.subject || "";
 		form.value.description = item.description || "";
@@ -442,9 +460,8 @@
 		}
 
 		switch (datePreset) {
-			case "today": {
+			case "today":
 				return { start: todayStart, end: todayEnd };
-			}
 			case "7d": {
 				const start = new Date(todayStart);
 				start.setDate(start.getDate() - 6);
@@ -813,12 +830,19 @@
 	}
 
 	async function apiRequest(url, options = {}) {
+		const headers = {
+			...authHeaders.value,
+			...(options.headers || {})
+		};
+
+		const isFormData = options.body instanceof FormData;
+		if (isFormData && headers["Content-Type"]) {
+			delete headers["Content-Type"];
+		}
+
 		const response = await fetch(url, {
 			...options,
-			headers: {
-				...authHeaders.value,
-				...(options.headers || {})
-			}
+			headers
 		});
 
 		const contentType = response.headers.get("content-type") || "";
@@ -836,6 +860,9 @@
 				payload?.message ||
 				payload?.title ||
 				(typeof payload === "string" ? payload : "") ||
+				(payload?.errors
+					? JSON.stringify(payload)
+					: "") ||
 				`HTTP ${response.status}`;
 			throw new Error(message);
 		}
@@ -913,15 +940,20 @@
 
 	function buildUpdatePayload() {
 		const priorityId = getPriorityId(form.value.priority);
+		const statusId = getStatusId(form.value.status);
 
 		const formData = new FormData();
 		formData.append("AreaId", String(Number(form.value.areaId)));
 		formData.append("RequestTypeId", String(Number(form.value.typeId)));
 		formData.append("PriorityId", String(priorityId));
-		formData.append("StatusId", "1");
+		formData.append("StatusId", String(statusId));
 		formData.append("Subject", form.value.subject.trim());
 		formData.append("Description", form.value.description.trim());
 		formData.append("RemoveAttachment", form.value.removeAttachment ? "true" : "false");
+
+		if (canonicalStatusLabel(form.value.status) === "Rechazada") {
+			formData.append("RejectionReason", form.value.rejectionReason.trim());
+		}
 
 		if (form.value.attachment instanceof File) {
 			formData.append("Attachment", form.value.attachment);
@@ -930,12 +962,35 @@
 		return formData;
 	}
 
+	function buildStatusPayload() {
+		const payload = {
+			status: getStatusId(form.value.status)
+		};
+
+		if (canonicalStatusLabel(form.value.status) === "Rechazada") {
+			payload.rejectionReason = form.value.rejectionReason.trim();
+		}
+
+		return payload;
+	}
+
 	function validateForm() {
+		if (isEditing.value && isAdmin.value && !isSuperAdmin.value) {
+			if (!form.value.status) return "Debes seleccionar un estado.";
+			if (canonicalStatusLabel(form.value.status) === "Rechazada" && !form.value.rejectionReason.trim()) {
+				return "Debes ingresar el motivo del rechazo.";
+			}
+			return "";
+		}
+
 		if (!form.value.areaId) return "Debes seleccionar un área.";
 		if (!form.value.typeId) return "Debes seleccionar un tipo de solicitud.";
 		if (!form.value.priority) return "Debes seleccionar una prioridad.";
 		if (!form.value.subject.trim()) return "Debes ingresar el asunto.";
 		if (!form.value.description.trim()) return "Debes ingresar la descripción.";
+		if (canonicalStatusLabel(form.value.status) === "Rechazada" && !form.value.rejectionReason.trim()) {
+			return "Debes ingresar el motivo del rechazo.";
+		}
 		if (form.value.attachment && form.value.attachment.size > 10 * 1024 * 1024) return "El archivo supera el máximo de 10MB.";
 		return "";
 	}
@@ -954,6 +1009,29 @@
 
 		try {
 			if (isEditing.value && editingRequestId.value) {
+				if (isAdmin.value && !isSuperAdmin.value) {
+					const responsePayload = await apiRequest(`${API_BASE}/api/ServiceRequests/${editingRequestId.value}/status`, {
+						method: "POST",
+						headers: {
+							"Content-Type": "application/json"
+						},
+						body: JSON.stringify(buildStatusPayload())
+					});
+
+					syncLocalRequestState(editingRequestId.value, {
+						status: canonicalStatusLabel(form.value.status),
+						statusName: canonicalStatusLabel(form.value.status),
+						statusId: getStatusId(form.value.status),
+						rejectionReason: canonicalStatusLabel(form.value.status) === "Rechazada" ? form.value.rejectionReason.trim() : "",
+						...(responsePayload || {})
+					});
+
+					submitSuccess.value = "Estado actualizado correctamente.";
+					closeNew();
+					await loadRequests();
+					return;
+				}
+
 				const updatePayload = buildUpdatePayload();
 
 				const responsePayload = await apiRequest(`${API_BASE}/api/ServiceRequests/${editingRequestId.value}`, {
@@ -964,11 +1042,11 @@
 				const responseNormalized = responsePayload ? normalizeRequest(responsePayload, 0) : null;
 
 				syncLocalRequestState(editingRequestId.value, {
-					status: "Nueva",
-					statusName: "Nueva",
-					requestStatusName: "Nueva",
-					statusId: 1,
-					rejectionReason: "",
+					status: canonicalStatusLabel(form.value.status),
+					statusName: canonicalStatusLabel(form.value.status),
+					requestStatusName: canonicalStatusLabel(form.value.status),
+					statusId: getStatusId(form.value.status),
+					rejectionReason: canonicalStatusLabel(form.value.status) === "Rechazada" ? form.value.rejectionReason.trim() : "",
 					attachmentName: form.value.removeAttachment ? "" : responseNormalized?.attachmentName || displayAttachmentName.value,
 					attachmentPath: form.value.removeAttachment ? "" : responseNormalized?.attachmentPath || responseNormalized?.attachmentUrl || form.value.attachmentUrl,
 					attachmentUrl: form.value.removeAttachment ? "" : responseNormalized?.attachmentUrl || responseNormalized?.attachmentPath || form.value.attachmentUrl,
@@ -1062,7 +1140,9 @@
 			if (String(newAreaId) !== String(oldAreaId)) {
 				form.value.typeId = "";
 			}
-			await loadTypesByArea(newAreaId);
+			if (canEditFields.value || !isEditing.value) {
+				await loadTypesByArea(newAreaId);
+			}
 		}
 	);
 
@@ -1443,7 +1523,7 @@
 								<div class="field">
 									<label>Área *</label>
 									<div class="selectWrap">
-										<select v-model="form.areaId" class="selectNative">
+										<select v-model="form.areaId" class="selectNative" :disabled="isEditing && !canEditFields">
 											<option value="" disabled>
 												{{ isLoadingAreas ? "Cargando áreas..." : areas.length ? "Selecciona un área" : "No hay áreas disponibles" }}
 											</option>
@@ -1457,7 +1537,7 @@
 								<div class="field">
 									<label>Tipo de Solicitud *</label>
 									<div class="selectWrap">
-										<select v-model="form.typeId" class="selectNative" :disabled="!form.areaId || isLoadingTypes">
+										<select v-model="form.typeId" class="selectNative" :disabled="(!form.areaId || isLoadingTypes) || (isEditing && !canEditFields)">
 											<option value="" disabled>
 												{{ !form.areaId ? "Selecciona un área primero" : isLoadingTypes ? "Cargando tipos..." : requestTypes.length ? "Selecciona un tipo" : "No hay tipos disponibles" }}
 											</option>
@@ -1470,47 +1550,65 @@
 								</div>
 							</div>
 
-							<div class="field">
-								<label>Prioridad *</label>
-								<div class="prio">
-									<button class="prioCard prioCard--low" :class="{ 'prioCard--active': form.priority === 'Baja' }" type="button" @click="form.priority = 'Baja'">
-										<div class="prioHead">
-											<div class="prioDot prioDot--low"></div>
-											<div class="prioMain">Baja</div>
-										</div>
-										<div class="prioSub">Prioridad baja</div>
-									</button>
+							<div class="row2">
+								<div class="field">
+									<label>Prioridad *</label>
+									<div class="prio">
+										<button class="prioCard prioCard--low" :class="{ 'prioCard--active': form.priority === 'Baja' }" type="button" :disabled="isEditing && !canEditFields" @click="canEditFields || !isEditing ? form.priority = 'Baja' : null">
+											<div class="prioHead">
+												<div class="prioDot prioDot--low"></div>
+												<div class="prioMain">Baja</div>
+											</div>
+											<div class="prioSub">Prioridad baja</div>
+										</button>
 
-									<button class="prioCard prioCard--mid" :class="{ 'prioCard--active': form.priority === 'Media' }" type="button" @click="form.priority = 'Media'">
-										<div class="prioHead">
-											<div class="prioDot prioDot--mid"></div>
-											<div class="prioMain">Media</div>
-										</div>
-										<div class="prioSub">Prioridad media</div>
-									</button>
+										<button class="prioCard prioCard--mid" :class="{ 'prioCard--active': form.priority === 'Media' }" type="button" :disabled="isEditing && !canEditFields" @click="canEditFields || !isEditing ? form.priority = 'Media' : null">
+											<div class="prioHead">
+												<div class="prioDot prioDot--mid"></div>
+												<div class="prioMain">Media</div>
+											</div>
+											<div class="prioSub">Prioridad media</div>
+										</button>
 
-									<button class="prioCard prioCard--high" :class="{ 'prioCard--active': form.priority === 'Alta' }" type="button" @click="form.priority = 'Alta'">
-										<div class="prioHead">
-											<div class="prioDot prioDot--high"></div>
-											<div class="prioMain">Alta</div>
-										</div>
-										<div class="prioSub">Prioridad alta</div>
-									</button>
+										<button class="prioCard prioCard--high" :class="{ 'prioCard--active': form.priority === 'Alta' }" type="button" :disabled="isEditing && !canEditFields" @click="canEditFields || !isEditing ? form.priority = 'Alta' : null">
+											<div class="prioHead">
+												<div class="prioDot prioDot--high"></div>
+												<div class="prioMain">Alta</div>
+											</div>
+											<div class="prioSub">Prioridad alta</div>
+										</button>
+									</div>
+								</div>
+
+								<div v-if="showStatusField" class="field">
+									<label>Estado *</label>
+									<div class="selectWrap">
+										<select v-model="form.status" class="selectNative">
+											<option v-for="status in requestStatusCatalog" :key="status.id" :value="status.label">
+												{{ status.label }}
+											</option>
+										</select>
+									</div>
 								</div>
 							</div>
 
 							<div class="field field--wide">
 								<label>Asunto *</label>
-								<input v-model.trim="form.subject" type="text" placeholder="Describe brevemente el motivo de la solicitud." />
+								<input v-model.trim="form.subject" type="text" placeholder="Describe brevemente el motivo de la solicitud." :disabled="isEditing && !canEditFields" />
 							</div>
 
 							<div class="field field--wide">
 								<label>Descripción Detallada *</label>
-								<textarea v-model.trim="form.description" rows="4" placeholder="Proporciona todos los detalles relevantes sobre tu solicitud..." />
+								<textarea v-model.trim="form.description" rows="4" placeholder="Proporciona todos los detalles relevantes sobre tu solicitud..." :disabled="isEditing && !canEditFields" />
+							</div>
+
+							<div v-if="showRejectionReasonField" class="field field--wide">
+								<label>Motivo del rechazo *</label>
+								<textarea v-model.trim="form.rejectionReason" rows="3" placeholder="Escribe el motivo del rechazo..." />
 							</div>
 						</section>
 
-						<section class="formCard">
+						<section class="formCard" v-if="canEditFields || !isEditing">
 							<div class="formCard__header">
 								<div class="formCard__title">Adjunto</div>
 								<div class="formCard__sub">Puedes incluir soporte visual o documental.</div>
@@ -1599,11 +1697,13 @@
 					<aside class="modalSide">
 						<div class="sideCard">
 							<div class="sideCard__title">Estado de la solicitud</div>
-							<div class="sideCard__sub">En este flujo la solicitud se mantiene en Nueva mientras puedes editarla.</div>
+							<div class="sideCard__sub">
+								{{ showStatusField ? "Admin y SuperAdmin pueden cambiar el estado desde esta edición." : "En este flujo la solicitud se mantiene en Nueva mientras puedes editarla." }}
+							</div>
 
 							<div class="statusFormGrid">
-								<button class="statusFormOption statusFormOption--new statusFormOption--active" type="button">
-									Nueva
+								<button class="statusFormOption" :class="[`statusFormOption--${formStatusTone}`, 'statusFormOption--active']" type="button">
+									{{ form.status }}
 								</button>
 							</div>
 						</div>
@@ -1625,6 +1725,10 @@
 								<div class="sideMeta__item">
 									<span class="sideMeta__label">Estado actual</span>
 									<span class="statusBadge" :class="`statusBadge--${formStatusTone}`">{{ form.status }}</span>
+								</div>
+								<div v-if="showRejectionReasonField" class="sideMeta__item">
+									<span class="sideMeta__label">Motivo del rechazo</span>
+									<span class="sideMeta__value">{{ form.rejectionReason || "Pendiente" }}</span>
 								</div>
 							</div>
 						</div>
@@ -2305,7 +2409,8 @@
 		color: rgba(170, 40, 80, 0.95);
 	}
 
-	.iconAction:disabled {
+	.iconAction:disabled,
+	.prioCard:disabled {
 		opacity: 0.6;
 		cursor: not-allowed;
 	}
@@ -2700,6 +2805,7 @@
 		font-size: 13px;
 		font-weight: 800;
 		color: rgba(39, 46, 86, 0.86);
+		word-break: break-word;
 	}
 
 	.msg {
@@ -2713,6 +2819,7 @@
 		background: rgba(255, 90, 130, 0.12);
 		color: rgba(170, 40, 80, 0.95);
 		border: 1px solid rgba(255, 90, 130, 0.18);
+		word-break: break-word;
 	}
 
 	.msg--ok {
