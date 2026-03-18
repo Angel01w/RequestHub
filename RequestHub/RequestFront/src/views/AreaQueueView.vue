@@ -82,6 +82,20 @@
 		}
 	}
 
+	const currentUser = computed(() => auth.user || getStoredUser() || null)
+
+	const currentUserId = computed(() => {
+		const raw =
+			currentUser.value?.id ??
+			currentUser.value?.userId ??
+			currentUser.value?.Id ??
+			currentUser.value?.UserId ??
+			null
+
+		const parsed = Number(raw)
+		return Number.isFinite(parsed) && parsed > 0 ? parsed : null
+	})
+
 	const currentRole = computed(() =>
 		normalizeRole(auth.user?.role || auth.role || getStoredUser()?.role)
 	)
@@ -417,6 +431,12 @@
 			statusId
 		)
 
+		const assignedToUserIdRaw = firstNonEmpty(item.assignedToUserId, item.AssignedToUserId, null)
+		const assignedToUserIdParsed = Number(assignedToUserIdRaw)
+		const assignedToUserId = Number.isFinite(assignedToUserIdParsed) && assignedToUserIdParsed > 0
+			? assignedToUserIdParsed
+			: null
+
 		return {
 			id: firstNonEmpty(item.id, item.serviceRequestId, item.requestId, index + 1),
 			requestNumber: firstNonEmpty(item.number, item.requestNumber, item.code, `SOL-${String(index + 1).padStart(4, "0")}`),
@@ -433,7 +453,15 @@
 			statusKey: resolveStatusTone(status),
 			rejectionReason: firstNonEmpty(item.rejectionReason, item.RejectionReason, ""),
 			createdAtUtc,
-			assignedToUserId: firstNonEmpty(item.assignedToUserId, item.AssignedToUserId, null),
+			assignedToUserId,
+			canTake: Boolean(item.canTake ?? item.CanTake ?? false),
+			canEdit: Boolean(item.canEdit ?? item.CanEdit ?? false),
+			canDelete: Boolean(item.canDelete ?? item.CanDelete ?? false),
+			canChangeStatus: Boolean(item.canChangeStatus ?? item.CanChangeStatus ?? false),
+			canComment: Boolean(item.canComment ?? item.CanComment ?? false),
+			canClose: Boolean(item.canClose ?? item.CanClose ?? false),
+			isTaken: assignedToUserId !== null,
+			isTakenByCurrentUser: assignedToUserId !== null && currentUserId.value !== null && assignedToUserId === currentUserId.value,
 			raw: item
 		}
 	}
@@ -692,6 +720,8 @@
 	}
 
 	async function openEdit(item) {
+		if (!item?.id || !item.canEdit) return
+
 		resetForm()
 		editingRequestId.value = item.id
 		editingRequestSnapshot.value = { ...item }
@@ -775,6 +805,8 @@
 			return
 		}
 
+		if (!editingRequestId.value) return
+
 		isSubmitting.value = true
 
 		try {
@@ -796,6 +828,8 @@
 	}
 
 	async function takeRequest(item) {
+		if (!item?.id || !item.canTake) return
+
 		takingId.value = item.id
 		try {
 			await apiRequest(`${API_BASE}/api/ServiceRequests/${item.id}/take`, {
@@ -810,6 +844,8 @@
 	}
 
 	async function removeRequest(item) {
+		if (!item?.id || !item.canDelete) return
+
 		const confirmed = window.confirm(`¿Seguro que deseas eliminar la solicitud ${item.requestNumber}?`)
 		if (!confirmed) return
 
@@ -1114,17 +1150,28 @@
 										Ver
 									</button>
 
-									<button class="actionBtn actionBtn--take" type="button" :disabled="takingId === item.id" @click="takeRequest(item)">
+									<button v-if="item.canTake"
+											class="actionBtn actionBtn--take"
+											type="button"
+											:disabled="takingId === item.id"
+											@click="takeRequest(item)">
 										<svg viewBox="0 0 24 24"><path :d="iconPath('take')" /></svg>
 										{{ takingId === item.id ? "Tomando..." : "Tomar" }}
 									</button>
 
-									<button class="actionBtn actionBtn--edit" type="button" @click="openEdit(item)">
+									<button v-if="item.canEdit"
+											class="actionBtn actionBtn--edit"
+											type="button"
+											@click="openEdit(item)">
 										<svg viewBox="0 0 24 24"><path :d="iconPath('edit')" /></svg>
 										Editar
 									</button>
 
-									<button class="actionBtn actionBtn--delete" type="button" :disabled="deletingId === item.id" @click="removeRequest(item)">
+									<button v-if="item.canDelete"
+											class="actionBtn actionBtn--delete"
+											type="button"
+											:disabled="deletingId === item.id"
+											@click="removeRequest(item)">
 										<svg viewBox="0 0 24 24"><path :d="iconPath('trash')" /></svg>
 										{{ deletingId === item.id ? "Eliminando..." : "Eliminar" }}
 									</button>

@@ -36,6 +36,20 @@
 		return auth.token || localStorage.getItem("rh_token") || localStorage.getItem("token") || ""
 	}
 
+	const currentUser = computed(() => auth.user || getStoredUser() || null)
+
+	const currentUserId = computed(() => {
+		const raw =
+			currentUser.value?.id ??
+			currentUser.value?.userId ??
+			currentUser.value?.Id ??
+			currentUser.value?.UserId ??
+			null
+
+		const parsed = Number(raw)
+		return Number.isFinite(parsed) && parsed > 0 ? parsed : null
+	})
+
 	const currentRole = computed(() =>
 		String(auth.user?.role || auth.role || getStoredUser()?.role || "").trim().toLowerCase()
 	)
@@ -240,6 +254,7 @@
 		const assignedToName = cleanDisplayText(raw.assignedToName || raw.assignedTo || raw.assignedUserName || raw.assignedUser)
 		const createdByName = cleanDisplayText(raw.createdByName || raw.createdBy || raw.createdByUserName || raw.createdByUser)
 		const commentsRaw = Array.isArray(raw.comments) ? raw.comments : Array.isArray(raw.Comments) ? raw.Comments : []
+
 		const attachmentPath = normalizeAttachmentPath(
 			raw.attachmentPath ||
 			raw.AttachmentPath ||
@@ -250,6 +265,7 @@
 			raw.attachmentUrl ||
 			raw.AttachmentUrl
 		)
+
 		const normalizedAttachmentName = cleanDisplayText(
 			raw.attachmentName ||
 			raw.AttachmentName ||
@@ -261,6 +277,34 @@
 			raw.AttachmentStoredFileName ||
 			extractFileNameFromPath(attachmentPath)
 		)
+
+		const assignedToUserIdRaw =
+			raw.assignedToUserId ??
+			raw.AssignedToUserId ??
+			null
+
+		const createdByUserIdRaw =
+			raw.createdByUserId ??
+			raw.CreatedByUserId ??
+			null
+
+		const assignedToUserIdParsed = Number(assignedToUserIdRaw)
+		const createdByUserIdParsed = Number(createdByUserIdRaw)
+
+		const assignedToUserId = Number.isFinite(assignedToUserIdParsed) && assignedToUserIdParsed > 0
+			? assignedToUserIdParsed
+			: null
+
+		const createdByUserId = Number.isFinite(createdByUserIdParsed) && createdByUserIdParsed > 0
+			? createdByUserIdParsed
+			: null
+
+		const canTake = Boolean(raw.canTake ?? raw.CanTake ?? false)
+		const canEdit = Boolean(raw.canEdit ?? raw.CanEdit ?? false)
+		const canDelete = Boolean(raw.canDelete ?? raw.CanDelete ?? false)
+		const canComment = Boolean(raw.canComment ?? raw.CanComment ?? false)
+		const canChangeStatus = Boolean(raw.canChangeStatus ?? raw.CanChangeStatus ?? false)
+		const canClose = Boolean(raw.canClose ?? raw.CanClose ?? false)
 
 		return {
 			id: raw.id ?? raw.Id ?? raw.serviceRequestId ?? raw.requestId ?? null,
@@ -277,10 +321,20 @@
 			priority,
 			createdAt: raw.createdAtUtc ?? raw.createdAt ?? raw.CreatedAtUtc ?? raw.CreatedAt ?? null,
 			createdByName,
+			createdByUserId,
 			assignedToName,
+			assignedToUserId,
+			isTaken: assignedToUserId !== null,
+			isTakenByCurrentUser: assignedToUserId !== null && currentUserId.value !== null && assignedToUserId === currentUserId.value,
 			attachmentPath,
 			attachmentUrl: buildAttachmentUrl(attachmentPath),
 			attachmentName: normalizedAttachmentName,
+			canTake,
+			canEdit,
+			canDelete,
+			canComment,
+			canChangeStatus,
+			canClose,
 			comments: commentsRaw.map(normalizeComment)
 		}
 	}

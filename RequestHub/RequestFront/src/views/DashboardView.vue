@@ -14,6 +14,7 @@
 	const loadError = ref("")
 	const requests = ref([])
 	const deletingId = ref(null)
+	const takingId = ref(null)
 
 	const isEditOpen = ref(false)
 	const isSubmitting = ref(false)
@@ -90,7 +91,20 @@
 		return String(role ?? "").trim().toLowerCase()
 	}
 
-	const currentRole = computed(() => normalizeRole(getStoredUser()?.role))
+	const currentUser = computed(() => getStoredUser() || null)
+	const currentUserId = computed(() => {
+		const raw =
+			currentUser.value?.id ??
+			currentUser.value?.userId ??
+			currentUser.value?.Id ??
+			currentUser.value?.UserId ??
+			null
+
+		const parsed = Number(raw)
+		return Number.isFinite(parsed) && parsed > 0 ? parsed : null
+	})
+	const currentRole = computed(() => normalizeRole(currentUser.value?.role))
+	const isSuperAdmin = computed(() => currentRole.value === "superadmin")
 	const canManageStatus = computed(() => currentRole.value === "superadmin" || currentRole.value === "admin")
 	const availableStatusOptions = computed(() => {
 		if (!canManageStatus.value) return []
@@ -119,6 +133,8 @@
 				return "M4 20h4l10-10-4-4L4 16v4Zm9-13 4 4"
 			case "trash":
 				return "M6 7h12M9 7V5h6v2M8 7l1 13h6l1-13"
+			case "plus":
+				return "M12 5v14M5 12h14"
 			case "arrowLeft":
 				return "M15 18l-6-6 6-6"
 			case "paperPlane":
@@ -272,6 +288,22 @@
 			""
 		)
 
+		const assignedToUserIdRaw =
+			request?.assignedToUserId ??
+			request?.assignedUserId ??
+			request?.raw?.assignedToUserId ??
+			request?.raw?.assignedUserId ??
+			null
+
+		const assignedToUserIdParsed = Number(assignedToUserIdRaw)
+		const assignedToUserId = Number.isFinite(assignedToUserIdParsed) && assignedToUserIdParsed > 0
+			? assignedToUserIdParsed
+			: null
+
+		const canTake = Boolean(request?.canTake ?? request?.raw?.canTake)
+		const canEdit = Boolean(request?.canEdit ?? request?.raw?.canEdit)
+		const canDelete = Boolean(request?.canDelete ?? request?.raw?.canDelete)
+
 		return {
 			...request,
 			id: request?.id ?? request?.raw?.id ?? request?.raw?.requestId ?? request?.raw?.serviceRequestId ?? null,
@@ -284,8 +316,12 @@
 			priorityName,
 			statusName,
 			statusKey: request?.statusKey || buildStatusKey(statusName),
-			canEdit: Boolean(request?.canEdit ?? request?.raw?.canEdit),
-			canDelete: Boolean(request?.canDelete ?? request?.raw?.canDelete),
+			canEdit,
+			canDelete,
+			canTake,
+			assignedToUserId,
+			isTaken: assignedToUserId !== null,
+			isTakenByCurrentUser: assignedToUserId !== null && currentUserId.value !== null && assignedToUserId === currentUserId.value,
 			areaId: request?.areaId ?? request?.raw?.areaId ?? "",
 			typeId: request?.typeId ?? request?.requestTypeId ?? request?.raw?.typeId ?? request?.raw?.requestTypeId ?? "",
 			typeName: request?.typeName ?? request?.requestType ?? request?.raw?.typeName ?? request?.raw?.requestType ?? "",
@@ -574,6 +610,25 @@
 		}
 	}
 
+	async function takeRequest(request) {
+		if (!request?.id || !request?.canTake || isSuperAdmin.value) return
+
+		takingId.value = request.id
+		loadError.value = ""
+
+		try {
+			await apiRequest(`/api/ServiceRequests/${request.id}/take`, {
+				method: "POST"
+			})
+
+			await loadRequests()
+		} catch (error) {
+			loadError.value = error?.message || "No se pudo tomar la solicitud."
+		} finally {
+			takingId.value = null
+		}
+	}
+
 	async function removeRequest(request) {
 		if (!request?.id || !request?.canDelete) return
 
@@ -808,6 +863,14 @@
 								<div class="actions-row">
 									<button class="action-btn" type="button" @click="openRequest(request)">
 										<svg viewBox="0 0 24 24"><path :d="iconPath('eye')" /></svg>
+									</button>
+
+									<button v-if="!isSuperAdmin && request.canTake"
+											class="action-btn action-btn--take"
+											type="button"
+											:disabled="takingId === request.id"
+											@click="takeRequest(request)">
+										<svg viewBox="0 0 24 24"><path :d="iconPath('plus')" /></svg>
 									</button>
 
 									<button v-if="request.canEdit"
@@ -1401,6 +1464,10 @@
 		place-items: center;
 		cursor: pointer;
 		color: #5b49c6;
+	}
+
+	.action-btn--take {
+		color: #2c8a6a;
 	}
 
 	.action-btn--edit {
